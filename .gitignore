@@ -1,0 +1,17 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+
+# Benchmark output. Every run writes one JSON here plus a resumable checkpoint;
+# reference numbers that are meant to be committed live in reference-results/.
+benchmark-results/
+
+# data/images/ is deliberately NOT ignored — the 841 screenshots are committed, so a
+# clone is everything you need. If a v2 corpus ever replaces them, remember that the v1
+# blobs stay in history: PNGs do not delta-compress, and the only way to drop them is a
+# force-push that breaks every existing clone and fork.

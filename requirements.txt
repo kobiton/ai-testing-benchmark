@@ -1,0 +1,9 @@
+# Benchmark — this is all you need to score a model against the dataset.
+# To label your own screenshots instead, see requirements-pipeline.txt.
+httpx>=0.27.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+# One repair attempt on malformed JSON before an answer is called a parse failure.
+json-repair>=0.30.0
+# Reads image dimensions, and resizes only when --max-image-dim is set.
+Pillow>=10.0.0
