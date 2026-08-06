@@ -65,6 +65,14 @@ Full summaries, including token totals and every field described below, are in
 [`reference-results/`](reference-results/). Latency is recorded but describes a laptop, not a GPU
 deployment — do not read it as a production figure.
 
+**[Browse the results screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/)**
+
+A percentage tells you how often a model was right; it does not show you *how* it was wrong. The
+viewer draws the ground-truth box and the model's prediction over the same screenshot — green for
+pass, red for fail — with the per-element list beside it and a filter for each of the three
+phrasings, so a near-miss on a 34px icon is visibly a different failure from a prediction that
+landed on the wrong control entirely. No sign-in, nothing to install, read-only.
+
 ---
 
 ## Quickstart
