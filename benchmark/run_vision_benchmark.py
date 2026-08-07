@@ -55,7 +55,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET = "dataset-v1.jsonl"
 
 IOU_THRESHOLD = 0.5
-WORST_CASES_N = 20
 
 # The three ways step 3 of the labeling pipeline phrases every element, in the order it
 # writes them (pipeline/step3_generate_descriptions.py). Benchmarking more than one is
@@ -1013,9 +1012,9 @@ def _benchmark_element(
 
     if not image_path:
         # `pass_centroid` is spelled out even though it is always False here. It is the
-        # key `build_result` selects worst_cases on under the default metric, and leaving
-        # it off made a single missing screenshot end the whole run in a KeyError — at
-        # write time, after every other element had already been paid for.
+        # key `build_result` scores on under the default metric, and leaving it off made
+        # a single missing screenshot end the whole run in a KeyError — at write time,
+        # after every other element had already been paid for.
         return {
             **ident,
             "description": desc, "gt_bbox": gt_bbox,
@@ -1573,18 +1572,6 @@ def build_result(
         "p95_latency_ms": round(sorted(latencies)[int(total * 0.95)], 1) if latencies else 0,
     }
 
-    # Worst cases = failures under the PRIMARY metric, ordered worst-first by IoU.
-    # Read the same defensive way `_pass` above does: `--rescore` and `--finalize-only`
-    # take their rows from a file that may predate `pass_centroid`, where the equivalent
-    # is `click_inside`. A subscript here crashed the run rather than the row.
-    def _failed_primary(r):
-        if metric == "centroid":
-            return not bool(r.get("pass_centroid", r.get("click_inside")))
-        return not bool(r.get("pass_iou"))
-
-    failed = sorted([r for r in results if _failed_primary(r)], key=lambda r: r["iou"])
-    worst_cases = failed[:WORST_CASES_N]
-
     logger.info(
         "  primary(%s)=%.1f%%  IoU=%.1f%%  centroid=%.1f%%  mean_iou=%.3f  errors=%d",
         metric, primary_accuracy * 100,
@@ -1684,7 +1671,6 @@ def build_result(
         "thinking_budget": thinking_budget,
         "summary": summary,
         "results": results,
-        "worst_cases": worst_cases,
     }
 
 

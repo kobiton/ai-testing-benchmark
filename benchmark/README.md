@@ -11,8 +11,7 @@ written as warnings rather than as description for that reason.
 
 ## Metrics
 
-Both are always computed. `--metric` only selects the headline number and which rows are collected
-into `worst_cases`.
+Both are always computed. `--metric` only selects the headline number.
 
 | Metric | Pass condition | |
 |--------|----------------|---|
@@ -519,8 +518,7 @@ the sample size.
       "img_h": 2400,
       "raw": "[0.11, 0.44, 0.32, 0.51]"
     }
-  ],
-  "worst_cases": [ ]
+  ]
 }
 ```
 

@@ -26,19 +26,18 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 
 ## Results
 
-Two self-hosted models, both **Q4_K_M GGUF served by Ollama on an Apple Silicon laptop**, every
+Two self-hosted models, both **Q4_K_M GGUF served by Ollama on an Apple Silicon Mac mini**, every
 element scored under all three phrasings — 30,921 requests per model.
 
 | | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element |
-|---|---|---|---|---|---|
-| **Qwen2.5-VL-7B-Instruct** | **85.19%** | 49.19% | 0.493 | **100%** | 3,551 |
-| GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | 15.1% | 2,747 |
+|---|---|---|---|----------------|---|
+| **Qwen2.5-VL-7B-Instruct** | **85.19%** | 49.19% | 0.493 | **100%**       | 3,551 |
+| GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | **15.1%**      | 2,747 |
 
-**Read the last two columns before the first one.** GUI-Owl's higher centroid is not a better
-score — it is an answer to a different question. It is an agentic model trained to emit a click
-point `(x, y)`, so 84.9% of its answers carry no box at all. A point has no area, so it scores
-zero on IoU by construction. If what you need is a bounding box, coverage is a **gate**, not a
-metric, and the two models are not on the same leaderboard:
+**Note:** GUI-Owl's higher centroid is not a better score — it is an answer to a different question. It is an agentic model trained 
+to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. A point has no area, so it scores zero on IoU
+by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and the two models are not on
+the same leaderboard:
 
 ```
 iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
@@ -63,8 +62,8 @@ Full summaries, including token totals and every field described below, are in
 deployment — do not read it as a production figure.
 
 **[Browse the results screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/)**
-Ground truth and prediction drawn over the same screenshot, green for pass, red for fail. No
-sign-in.
+
+Ground truth and prediction drawn over the same screenshot, green for pass, red for fail.
 
 ---
 
@@ -73,15 +72,9 @@ sign-in.
 Python 3.9+, and an OpenAI-compatible endpoint serving a vision model.
 
 ```bash
-# The clone is ~315 MB: the screenshots are in the repository, so there is nothing to
-# download separately and no dataset registration to sign up for.
 git clone https://github.com/kobiton/ai-testing-benchmark.git
 cd ai-testing-benchmark
 
-# The venv is worth the two seconds: it keeps pip and python the same interpreter. If they
-# differ — pyenv, conda, a system python — the install lands where python will not look
-# for it, and the script exits on its first import having created nothing and printed no
-# log, which reads as "the command did nothing" rather than as a missing dependency.
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
@@ -176,9 +169,8 @@ python benchmark/run_vision_benchmark.py \
 | Descriptions | 3 per element (`name` / `label` / `intent`), on every element |
 | Labelled by | Claude Opus 4.8 |
 
-Screenshots were crawled from **public app-store packages**, not from customer or user data. Every
-element was found, boxed and described by a frontier model, then spot-checked before the dataset
-was accepted.
+Screenshots were crawled from **public app-store packages**. Every element was found, boxed and described by a frontier 
+model, then spot-checked before the dataset was accepted.
 
 **Ground truth from a model is a stated limitation, not a hidden one.** It buys 10,307 elements
 instead of the few hundred hand-labelling would have produced, and the box convention is at least
@@ -187,15 +179,13 @@ here is agreement with a strong labeller, not with a human.
 
 Both halves are in the repository — `data/dataset-v1.jsonl` and all 841 PNGs under
 `data/images/`, named `<screenshot_id>.png`. A clone is ~315 MB and is everything the benchmark
-needs; there is no separate download step, no account, and no external host that can go away and
-strand the annotations.
+needs; no separate download step required.
 
 ---
 
 ## What is being measured
 
-Two metrics, both always computed. `--metric` only picks which one is the headline and which rows
-are collected into `worst_cases`.
+Two metrics, both always computed. `--metric` only picks which one is the headline.
 
 | Metric | Pass condition | |
 |---|---|---|
