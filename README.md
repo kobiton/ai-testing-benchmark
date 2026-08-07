@@ -32,7 +32,7 @@ on the same corpus.
 Two self-hosted models, both **Q4_K_M GGUF served by Ollama on an Apple Silicon laptop**, every
 element scored under all three phrasings — 30,921 requests per model.
 
-| | centroid ★ | IoU ≥ 0.5 | median IoU | returned a box | input tok/element |
+| | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element |
 |---|---|---|---|---|---|
 | **Qwen2.5-VL-7B-Instruct** | **85.19%** | 49.19% | 0.493 | **100%** | 3,551 |
 | GUI-Owl-1.5-8B-Instruct | **87.80%** | 2.93% | 0.257 | **15.1%** | 2,747 |
