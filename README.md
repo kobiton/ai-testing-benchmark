@@ -2,28 +2,25 @@
 
 **Can a vision model find a UI element from a plain-English description?**
 
-That question decides whether AI can replace brittle selectors in a test script. Instead of a
-locator that breaks the moment a developer renames an id:
+If it can, UI tests may not need brittle selectors like:
 
 ```java
 findElement(By.xpath("//android.widget.Button[@resource-id='btn_scan_qr']"))
 ```
 
-you describe the element the way a person would, and something has to look at the screen and
-answer *where*:
+Instead, a test could describe what it wants:
 
 ```java
 findElement(byDescription("the scan QR code button"))   // illustrative
 ```
 
-This repository measures how well models do that. It ships **841 real Android screenshots with
-10,307 ground-truth elements**, each phrased three different ways, and a benchmark runner that
-works against **any OpenAI-compatible endpoint** - your own vLLM, llama.cpp or Ollama server, or
-a hosted API.
+and let a vision model locate the element on screen.
 
-It exists because we needed to choose a self-hosted model and could not find a benchmark that
-answered our actual question. Published so you can check our numbers, and score your own model
-on the same corpus.
+This repository benchmarks exactly that.
+
+It contains **841 real Android screenshots and 10,307 ground-truth UI elements**, each described in three different ways. The runner works with any **OpenAI-compatible endpoint**, including vLLM, llama.cpp, Ollama, and hosted APIs.
+
+It exists because we needed to choose a self-hosted model and wanted a benchmark tailored to the question we actually needed to answer. Published so you can check our numbers and score your own model on the same corpus.
 
 ---
 
@@ -35,7 +32,7 @@ element scored under all three phrasings — 30,921 requests per model.
 | | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element |
 |---|---|---|---|---|---|
 | **Qwen2.5-VL-7B-Instruct** | **85.19%** | 49.19% | 0.493 | **100%** | 3,551 |
-| GUI-Owl-1.5-8B-Instruct | **87.80%** | 2.93% | 0.257 | **15.1%** | 2,747 |
+| GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | 15.1% | 2,747 |
 
 **Read the last two columns before the first one.** GUI-Owl's higher centroid is not a better
 score — it is an answer to a different question. It is an agentic model trained to emit a click
