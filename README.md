@@ -203,7 +203,7 @@ figure, with the bias stated rather than corrected.
 rules into it would coach models toward the labeller's answer and measure agreement with our
 annotator rather than element localisation.
 
-### Check your model's coordinate scale before the full run
+### Pixels, or a 0–1000 grid?
 
 **Which coordinate scale a model answers on is a property of the model, and it cannot be recovered
 from a single answer.** On a 1080×2400 screenshot `[67, 91]` is a legal pixel pair *and* a legal
