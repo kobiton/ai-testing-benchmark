@@ -20,7 +20,7 @@ Both are always computed. `--metric` only selects the headline number.
 
 Centroid is the default because it is the question a tap asks, and because IoU on this corpus is
 dominated by box-convention disagreement rather than by localisation — the root README has the
-measurement.
+figures.
 
 **But centroid cuts both ways, so a third figure is needed to keep two models comparable.** A model
 that never returns a box cannot be judged on IoU, and a model judged only on centroid is never asked

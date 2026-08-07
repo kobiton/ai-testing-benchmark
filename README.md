@@ -201,20 +201,10 @@ IoU.** The mis-sizing is directional rather than noise: predicted area over grou
 median of **0.709**, with 46.3% of boxes more than 1.5× too small against 7.0% more than 1.5× too
 big. Models box the glyph; our ground truth boxes the full control including its padding.
 
-You can measure how much of the gap that convention accounts for without calling a model again.
-Rescale every predicted box around its own centre until its area exactly matches ground truth —
-the best case any prompt instruction could reach — and re-score:
-
-| Qwen2.5-VL, same 30,921 answers | IoU ≥ 0.5 | median IoU |
-|---|---|---|
-| as-is | 49.19% | 0.493 |
-| size-corrected | **71.97%** | **0.641** |
-
-So the box convention, not localisation, is the bulk of the IoU shortfall — and a consumer that
-tolerated a glyph-tight box would see a very different number from the one in our results table.
-That is exactly why the headline is centroid: it separates *did the model find the element* from
-*does the model draw the same kind of box we do*. IoU is carried as a secondary box-tightness
-figure, with the bias stated rather than corrected.
+So the headline is centroid because it separates *did the model find the element* from *does the
+model draw the same kind of box we do*. IoU is carried as a secondary box-tightness figure, with
+the bias stated rather than corrected — a consumer that accepted a glyph-tight box would read a
+very different number from the one in our results table.
 
 **The benchmark prompt deliberately states no box convention at all.** Loading the labeller's
 rules into it would coach models toward the labeller's answer and measure agreement with our
