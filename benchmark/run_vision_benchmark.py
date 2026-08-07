@@ -1012,11 +1012,16 @@ def _benchmark_element(
             break
 
     if not image_path:
+        # `pass_centroid` is spelled out even though it is always False here. It is the
+        # key `build_result` selects worst_cases on under the default metric, and leaving
+        # it off made a single missing screenshot end the whole run in a KeyError — at
+        # write time, after every other element had already been paid for.
         return {
             **ident,
             "description": desc, "gt_bbox": gt_bbox,
             "pred_bbox": None, "pred_point": None,
-            "iou": 0.0, "pass_iou": False, "click_inside": False,
+            "iou": 0.0, "pass_iou": False,
+            "click_inside": False, "pass_centroid": False,
             "error": "image not found", "latency_ms": 0,
             "input_tokens": 0, "output_tokens": 0,
             "cached_input_tokens": 0, "raw": "",
@@ -1569,8 +1574,15 @@ def build_result(
     }
 
     # Worst cases = failures under the PRIMARY metric, ordered worst-first by IoU.
-    pass_key = "pass_centroid" if metric == "centroid" else "pass_iou"
-    failed = sorted([r for r in results if not r[pass_key]], key=lambda r: r["iou"])
+    # Read the same defensive way `_pass` above does: `--rescore` and `--finalize-only`
+    # take their rows from a file that may predate `pass_centroid`, where the equivalent
+    # is `click_inside`. A subscript here crashed the run rather than the row.
+    def _failed_primary(r):
+        if metric == "centroid":
+            return not bool(r.get("pass_centroid", r.get("click_inside")))
+        return not bool(r.get("pass_iou"))
+
+    failed = sorted([r for r in results if _failed_primary(r)], key=lambda r: r["iou"])
     worst_cases = failed[:WORST_CASES_N]
 
     logger.info(
@@ -1847,7 +1859,14 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
     """
     rows = prior.get("results") or []
     if not rows:
-        raise ValueError("result file has no `results` rows to re-score")
+        # Reached by pointing --rescore at a summary-only file, which the published
+        # reference results are — and the README sends readers to that directory, so this
+        # is a normal mistake and gets a sentence rather than a traceback.
+        logger.error(
+            "%s carries a summary but no `results` rows, so there is nothing to re-score. "
+            "Re-scoring re-reads each row's own `raw` text, which only a file written by a "
+            "real run contains.", prior.get("model") or "that file")
+        sys.exit(1)
 
     max_image_dim = prior.get("max_image_dim", 0) or 0
     dim_cache: dict = {}
