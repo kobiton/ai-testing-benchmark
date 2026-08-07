@@ -193,18 +193,11 @@ Two metrics, both always computed. `--metric` only picks which one is the headli
 | IoU | IoU(pred, gt) ≥ 0.5 | |
 
 **Centroid is the default, and the reason is not that it is easier.** It is the question an
-automated tap actually asks — would the tap land on the control? IoU asks something stricter, and
-on this corpus most of what it measures turns out to be *box convention* rather than localisation.
-
-Take the Qwen2.5-VL run above. **36.0% of all rows locate the element correctly and still fail
-IoU.** The mis-sizing is directional rather than noise: predicted area over ground-truth area has a
-median of **0.709**, with 46.3% of boxes more than 1.5× too small against 7.0% more than 1.5× too
-big. Models box the glyph; our ground truth boxes the full control including its padding.
-
-So the headline is centroid because it separates *did the model find the element* from *does the
-model draw the same kind of box we do*. IoU is carried as a secondary box-tightness figure, with
-the bias stated rather than corrected — a consumer that accepted a glyph-tight box would read a
-very different number from the one in our results table.
+automated tap actually asks — would the tap land on the control? IoU asks something stricter: that
+the model also draw the same kind of box we do. Models tend to box the glyph, while our ground
+truth boxes the full control including its padding, so an element that was located correctly can
+still fail IoU. Centroid separates the two questions; IoU is carried as a secondary box-tightness
+figure, with the bias stated rather than corrected.
 
 **The benchmark prompt deliberately states no box convention at all.** Loading the labeller's
 rules into it would coach models toward the labeller's answer and measure agreement with our
