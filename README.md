@@ -203,18 +203,10 @@ figure, with the bias stated rather than corrected.
 rules into it would coach models toward the labeller's answer and measure agreement with our
 annotator rather than element localisation.
 
-### Five fields to read before believing an accuracy
-
-Each of these exists because a number was once believed that should not have been.
-[`benchmark/README.md`](benchmark/README.md) has the full story on every one.
-
-| Field | Why it decides whether the accuracy means anything |
-|---|---|
-| `bbox_coverage` | Share of answers that contained a box at all. A **gate** where you need a box — see the results table |
-| `scale_check` | Whether predictions are distributed like the ground truth per axis. The only guard that can see a coordinate-convention error, and only in aggregate |
-| `clamped_pred_count` | Predictions pushed against the [0,1] edge. Catches *prose scraped into a box* — 23% on one thinking model we tried, 1.0% on the Qwen run. A **low** value means nothing: a full-width list row genuinely has width 1.0 |
-| `workers` | The concurrency every latency figure was measured at. Two runs at different values are not comparable on latency |
-| `elements_with_token_counts` | Kept apart from the token totals, because a server reporting no `usage` block leaves them at 0 — not the same finding as a cheap model |
+**Five summary fields decide whether an accuracy means anything at all**: `bbox_coverage`,
+`scale_check`, `clamped_pred_count`, `workers` and `elements_with_token_counts`. Each exists
+because a number was once believed that should not have been —
+[`benchmark/README.md`](benchmark/README.md) has the story on every one.
 
 ### If you are scoring your own model, read this first
 

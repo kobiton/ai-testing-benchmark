@@ -545,8 +545,9 @@ Two per-row fields exist so a result can be re-scored later without the images a
   guard that works in aggregate, and therefore the only one that can see a coordinate-convention error
   at all. `suspect: true` means the accuracy beside it is a property of the harness.
 - **`clamped_pred_count`** — predictions pushed against the [0,1] edge. This catches *prose being
-  scraped into a box*: 23% on one thinking model against 1.0% on the Qwen2.5-VL run. A **high** value
-  means the number below it measures the harness, not the model.
+  scraped into a box*, where the parser salvages numbers out of a sentence and lands on a full-frame
+  rectangle. A **high** value means the number below it measures the harness, not the model. A low
+  one means nothing on its own: a full-width list row genuinely has width 1.0.
 
   It does **not** catch a wrong coordinate scale, and an earlier version of this file claimed it did.
   That is false, and GUI-Owl disproved it: it answers on a 0–1000 grid, was read as 1080×2400 pixels,
