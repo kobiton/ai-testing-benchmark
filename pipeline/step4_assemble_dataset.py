@@ -1,30 +1,25 @@
 """
-Step 4. Dataset assembly and storage.
+Step 4. Dataset assembly.
 
-Merges all processed ScreenshotRecords into a JSONL file and uploads both the dataset and a stats summary to S3.
+Merges all processed ScreenshotRecords into one JSONL file under `data/`, beside a stats
+sidecar. Makes no LLM calls and touches no network — everything the pipeline produces
+stays on this machine.
 """
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
-from .config import config, dataset_filename, stats_filename
+from .config import DATA_DIR, config, dataset_filename, stats_filename
 from .models import ScreenshotRecord
 
 logger = logging.getLogger(__name__)
 
 
-def _get_s3():
-    import boto3
-    return boto3.client("s3", **config.boto3_kwargs())
+def assemble_dataset(records: list[ScreenshotRecord], output_name: str) -> dict:
+    """Write one JSONL line per element, plus a stats sidecar. Returns the stats dict.
 
-
-def assemble_and_upload(records: list[ScreenshotRecord], dry_run: bool = False, output_name: str = "") -> dict:
-    """
-    Writes one JSONL line per element across all records, uploads to S3.
-    Returns a stats dict.
-
-    dry_run=True: writes locally only, skips S3 upload (useful for local testing).
+    Both land in `data/`, next to the dataset this repository ships, because that is where
+    the benchmark's `--dataset` default already looks.
     """
     rows = []
     screenshots_with_no_elements = []
@@ -39,6 +34,9 @@ def assemble_and_upload(records: list[ScreenshotRecord], dry_run: bool = False, 
     stats = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "llm_provider": config.llm_provider,
+        # What produced these labels. A score is read together with the conditions it was
+        # measured under; the ground truth those scores are graded against should say who
+        # drew its boxes.
         "model": config.active_model,
         "total_screenshots": len(records),
         "screenshots_with_elements": len(records) - len(screenshots_with_no_elements),
@@ -52,36 +50,17 @@ def assemble_and_upload(records: list[ScreenshotRecord], dry_run: bool = False, 
 
     logger.info("Dataset stats: %s", json.dumps(stats, indent=2))
 
-    dataset_key = dataset_filename(output_name) if output_name else config.s3_dataset_key
-    stats_key = stats_filename(output_name) if output_name else config.s3_stats_key
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    dataset_path = DATA_DIR / dataset_filename(output_name)
+    stats_path = DATA_DIR / stats_filename(output_name)
 
-    if dry_run:
-        out_path = Path(dataset_key)
-        with open(out_path, "w") as f:
-            for row in rows:
-                f.write(json.dumps(row) + "\n")
-        logger.info("dry_run: wrote %d rows to %s", len(rows), out_path)
-        return stats
+    with open(dataset_path, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    logger.info("Wrote %d rows → %s", len(rows), dataset_path)
 
-    s3 = _get_s3()
-
-    # Upload JSONL
-    jsonl_body = "\n".join(json.dumps(r) for r in rows)
-    s3.put_object(
-        Bucket=config.s3_bucket,
-        Key=dataset_key,
-        Body=jsonl_body.encode("utf-8"),
-        ContentType="application/jsonl",
-    )
-    logger.info("Uploaded %d rows → s3://%s/%s", len(rows), config.s3_bucket, dataset_key)
-
-    # Upload stats
-    s3.put_object(
-        Bucket=config.s3_bucket,
-        Key=stats_key,
-        Body=json.dumps(stats, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-    logger.info("Uploaded stats → s3://%s/%s", config.s3_bucket, stats_key)
+    with open(stats_path, "w") as f:
+        json.dump(stats, f, indent=2)
+    logger.info("Wrote stats → %s", stats_path)
 
     return stats

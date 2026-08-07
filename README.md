@@ -331,17 +331,28 @@ python run_pipeline.py --input path/to/screenshots --output-name my-dataset
 | 1 · extract elements | 1 per screenshot | identify every interactive element |
 | 2 · detect boxes | **1 per element** | dominates the cost |
 | 3 · write descriptions | 1 per screenshot | three phrasings each |
-| 4 · assemble | 0 | merge, stats, optional S3 upload |
+| 4 · assemble | 0 | merge into one JSONL, write a stats sidecar |
+
+Everything it produces stays on your machine, under `data/`:
+
+```
+data/my-dataset.jsonl          the labels, in the same shape as the shipped dataset
+data/my-dataset-stats.json     counts, plus which provider and model did the labelling
+data/checkpoints/…             per-screenshot progress; deleted once the run completes cleanly
+```
+
+Those paths are anchored on the repository root, not on the directory you run the command from,
+so a resume finds the earlier run's progress wherever you start it. Point the benchmark at the
+result with `--dataset data/my-dataset.jsonl` and `--images-dir path/to/screenshots`.
 
 Budget `N + (N × E) + N` calls for N screenshots averaging E elements. At the 12.3 elements per
 screenshot we measured that is ~14 calls each, so the 841-screenshot corpus cost ~12,000 calls.
-**Use `--limit` to pilot a prompt change over a couple of hundred calls first.** Runs are
-checkpointed per screenshot and resume on re-run with the same `--output-name`.
+**Use `--limit` to pilot a prompt change over a couple of hundred calls first** — there is no flag
+that runs the pipeline without spending, and a small `--limit` is how you keep a trial cheap.
+Runs are checkpointed per screenshot and resume on re-run with the same `--output-name`.
 
-Three warnings the flags do not carry:
+Two warnings the flags do not carry:
 
-- **`--dry-run` still makes billable calls.** It only skips the S3 upload. The *benchmark's*
-  `--dry-run` is the one that calls nothing.
 - **Labelling is not reproducible.** No `temperature` is sent, because current frontier models
   reject any non-default value, so each model manages its own sampling. Compare boxes within one
   output file, never across two runs.
@@ -361,10 +372,23 @@ benchmark/
 pipeline/                   the four labelling steps
 run_pipeline.py             pipeline entrypoint
 data/
-  dataset-v1.jsonl          the ground-truth labels
-  images/                   841 screenshots, <screenshot_id>.png
-reference-results/          our published summaries, for checking your numbers
+  dataset-v1.jsonl          the ground-truth labels          ← committed
+  images/                   841 screenshots, <id>.png        ← committed
+reference-results/          our published summaries          ← committed
 ```
+
+Both tools write only inside the repository, and everything they write is gitignored:
+
+```
+data/<name>.jsonl           a dataset you label yourself
+data/<name>-stats.json      its stats sidecar
+data/checkpoints/           labelling progress, so an interrupted run resumes
+benchmark-results/          one JSON per benchmark run
+benchmark-results/checkpoints/   scored (element, phrasing) pairs, so a run resumes
+```
+
+Nothing is uploaded anywhere and nothing is read from a network location: the corpus is in the
+clone, and the only address the tools contact is the model endpoint you give them.
 
 ---
 

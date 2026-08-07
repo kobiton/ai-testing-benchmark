@@ -1,7 +1,7 @@
 """Per-screenshot checkpointing, so an interrupted labeling run can resume.
 
 Step 4 writes the dataset only once every screenshot is labeled, so without this a
-kill, crash or sleeping laptop discarded the whole run — at ~16 LLM calls per
+kill, crash or sleeping laptop discarded the whole run — at ~14 LLM calls per
 screenshot that is hours of paid work lost at screenshot 800 of 841.
 
 Each finished screenshot is appended here the moment it completes, and a re-run
@@ -10,32 +10,28 @@ with the same output name skips whatever is already recorded.
 One line per **screenshot**, not per element, so a screenshot that yielded no
 elements is still recorded as done rather than re-labeled on every resume.
 
-Paths are relative to the working directory, so run `run_pipeline.py` from the same
-directory each time or a resume will not find the checkpoint the earlier run wrote.
+Checkpoints live in `data/checkpoints/`, anchored on the repository root, so a resume
+finds the earlier run's progress no matter which directory you start it from.
 """
 import json
 import logging
 from pathlib import Path
 
-from .config import config, dataset_filename
+from .config import CHECKPOINT_DIR, dataset_filename
 from .models import BoundingBox, Element, ScreenshotRecord
 
 logger = logging.getLogger(__name__)
-
-CHECKPOINT_DIR = Path("data/checkpoints")
 
 
 def path_for(output_name: str) -> Path:
     """One checkpoint per output dataset, so runs producing different datasets
     never read each other's progress.
 
-    Named through `dataset_filename` for the same reason step 4 writes its key that way:
+    Named through `dataset_filename` for the same reason step 4 names its output that way:
     `Path(name).stem` alone strips everything after the last dot, so `foo-gpt-5.6-terra`
     and `foo-gpt-5.7-x` both checkpointed to `foo-gpt-5.partial.jsonl` and each would have
-    resumed from the other's progress. Normalizing first also keeps this agreeing with
-    `/api/admin/pipeline/checkpoint`, which probes on the raw name typed into the form."""
-    name = dataset_filename(output_name) if output_name else config.s3_dataset_key
-    return CHECKPOINT_DIR / f"{Path(name).stem}.partial.jsonl"
+    resumed from the other's progress."""
+    return CHECKPOINT_DIR / f"{Path(dataset_filename(output_name)).stem}.partial.jsonl"
 
 
 def read(path: Path) -> tuple[list[ScreenshotRecord], set]:
@@ -55,7 +51,6 @@ def read(path: Path) -> tuple[list[ScreenshotRecord], set]:
         entry = json.loads(line)
         records.append(ScreenshotRecord(
             screenshot_id=entry["screenshot_id"],
-            s3_key=entry["s3_key"],
             image_path=entry.get("image_path", ""),
             elements=[
                 Element(
@@ -81,7 +76,6 @@ def append(path: Path, record: ScreenshotRecord) -> None:
     with open(path, "a") as f:
         f.write(json.dumps({
             "screenshot_id": record.screenshot_id,
-            "s3_key": record.s3_key,
             "image_path": record.image_path,
             "rows": record.to_jsonl_rows(),
         }) + "\n")

@@ -11,6 +11,14 @@ __pycache__/
 # reference numbers that are meant to be committed live in reference-results/.
 benchmark-results/
 
+# A dataset you label yourself lands in data/ next to the shipped one, so ignore that
+# shape and name the shipped corpus as the exception. Without this a labelling run leaves
+# its output sitting in `git status` looking like something you forgot to commit.
+data/*.jsonl
+!data/dataset-v1.jsonl
+data/*-stats.json
+data/checkpoints/
+
 # data/images/ is deliberately NOT ignored — the 841 screenshots are committed, so a
 # clone is everything you need. If a v2 corpus ever replaces them, remember that the v1
 # blobs stay in history: PNGs do not delta-compress, and the only way to drop them is a

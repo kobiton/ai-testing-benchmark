@@ -1,18 +1,21 @@
 import os
+from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 
 load_dotenv()
 
-# .env wins for the AWS credentials only. A shell that already exports keys for
-# an unrelated account otherwise shadows the file and every S3 call 403s.
-# Everything else keeps normal precedence on purpose, so `LLM_PROVIDER=openai
-# python run_pipeline.py ...` overrides the file for one run instead of being
-# silently undone by it.
-_FILE_VALUES = dotenv_values()
-for _key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"):
-    if _FILE_VALUES.get(_key):
-        os.environ[_key] = _FILE_VALUES[_key]
+# Everything reads through the environment with normal precedence, so
+# `LLM_PROVIDER=openai python run_pipeline.py ...` overrides the .env file for one run.
+
+# Everything the pipeline reads and writes lives under this directory, anchored on the
+# repository root rather than the caller's CWD. Output used to be a bare relative path, so
+# `run_pipeline.py --output-name mine` dropped mine.jsonl into whatever directory you
+# happened to be standing in and a later run from elsewhere could not find its own
+# checkpoint.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = REPO_ROOT / "data"
+CHECKPOINT_DIR = DATA_DIR / "checkpoints"
 
 
 class Config:
@@ -27,19 +30,9 @@ class Config:
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
 
-    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
-    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
-    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-
-    s3_bucket: str = os.getenv("S3_BUCKET", "")
-    s3_prefix_screenshots: str = os.getenv("S3_PREFIX_SCREENSHOTS", "raw-screenshots")
-    s3_prefix_elements: str = os.getenv("S3_PREFIX_ELEMENTS", "extracted-elements")
-    s3_dataset_key: str = os.getenv("S3_DATASET_KEY", "dataset-v1.jsonl")
-    s3_stats_key: str = os.getenv("S3_STATS_KEY", "dataset-v1-stats.json")
-
-    # Screenshots labeled in parallel, and the sibling of BENCHMARK_WORKERS. The unit
-    # is a screenshot, not a request: a worker walks its own screenshot's ~16 calls one
-    # after another, so this is also how many requests are open at once.
+    # Screenshots labeled in parallel. The unit is a screenshot, not a request: a worker
+    # walks its own screenshot's ~14 calls one after another, so this is also how many
+    # requests are open at once.
     pipeline_workers: int = int(os.getenv("PIPELINE_WORKERS", "15"))
 
     @property
@@ -54,14 +47,6 @@ class Config:
         return (self.anthropic_model if self.llm_provider.lower() == "claude"
                 else self.openai_model)
 
-    def boto3_kwargs(self) -> dict:
-        """Return kwargs for boto3.client() — includes explicit credentials if set."""
-        kwargs = {"region_name": self.aws_region}
-        if self.aws_access_key_id and self.aws_secret_access_key:
-            kwargs["aws_access_key_id"] = self.aws_access_key_id
-            kwargs["aws_secret_access_key"] = self.aws_secret_access_key
-        return kwargs
-
 
 config = Config()
 
@@ -71,8 +56,7 @@ def dataset_filename(name: str) -> str:
 
     Readers filter on the extension, so a name typed without it produces a dataset that
     writes cleanly, logs success and is then invisible to everything that lists `*.jsonl`.
-    That cost us a 10,647-element dataset which sat in a bucket unusable until it was
-    renamed by hand.
+    That cost us a 10,647-element dataset which sat unusable until it was renamed by hand.
 
     Normalizing in one place rather than at each call site is what keeps the output file,
     the stats sidecar and the checkpoint agreeing on a single spelling.

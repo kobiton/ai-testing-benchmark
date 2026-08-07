@@ -24,18 +24,16 @@ class Element:
 class ScreenshotRecord:
     """One fully-labeled screenshot, written as one JSONL line per element."""
     screenshot_id: str
-    s3_key: str                     # where the screenshot was read from, for this run only
     image_path: str                 # local path used during processing
     elements: list[Element] = field(default_factory=list)
 
     def to_jsonl_rows(self) -> list[dict]:
         """Expand into one dict per element for JSONL output.
 
-        **`s3_key` is deliberately not among them.** It records where this particular run happened to read the screenshot
-        from, which is a fact about the machine that labelled it rather than about the element, a storage layout nobody
-        downstream can resolve, repeated on every row.
-        `screenshot_id` is the join key everything actually uses, and the benchmark resolves images as `<images-dir>/<screenshot_id>.png`.
-        It stays on the dataclass because the pipeline's own checkpoint round-trips it.
+        `image_path` is deliberately not among them: it records where this particular run happened to read the
+        screenshot from, which is a fact about the machine that labelled it rather than about the element.
+        `screenshot_id` is the join key everything actually uses, and the benchmark resolves images as
+        `<images-dir>/<screenshot_id>.png`.
         """
         rows = []
         for el in self.elements:

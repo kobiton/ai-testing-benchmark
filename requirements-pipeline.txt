@@ -6,7 +6,5 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 tqdm>=4.66.0
 # Exponential backoff on rate limits and connection errors. A dropped connection used to
-# abandon a whole screenshot's ~16 calls with no retry.
+# abandon a whole screenshot's ~14 calls with no retry.
 tenacity>=8.2.0
-# Only for --s3-input / uploading a finished dataset to S3. Skip it for local runs.
-boto3>=1.34.0
