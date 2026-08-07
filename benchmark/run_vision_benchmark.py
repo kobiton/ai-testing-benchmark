@@ -1997,8 +1997,12 @@ def main():
     # CWD. They used to be `../dataset-v1.jsonl`, which resolved correctly only when you
     # had cd'd into this directory first and otherwise produced a "dataset not found"
     # that reads as a missing download rather than as a wrong working directory.
-    parser.add_argument("--dataset", default=str(REPO_ROOT / "data" / DEFAULT_DATASET))
-    parser.add_argument("--images-dir", default=str(REPO_ROOT / "data" / "images"))
+    parser.add_argument("--dataset", default=str(REPO_ROOT / "data" / DEFAULT_DATASET),
+                        help="Labelled dataset to score against (default: the corpus this "
+                             "repository ships)")
+    parser.add_argument("--images-dir", default=str(REPO_ROOT / "data" / "images"),
+                        help="Where the screenshots are, resolved as "
+                             "<images-dir>/<screenshot_id>.png")
     # `--base-url` is the OpenAI-compatible name and the one the docs use; `--proxy-url`
     # is kept as an alias so existing scripts and checkpoints keep working.
     parser.add_argument("--base-url", "--proxy-url", dest="proxy_url",
@@ -2011,9 +2015,22 @@ def main():
     # back to OPENAI_API_KEY: that would forward a hosted credential to whatever
     # --base-url happens to point at.
     parser.add_argument("--api-key",
-                        default=os.getenv("API_KEY") or os.getenv("PROXY_API_KEY") or "")
-    parser.add_argument("--model", nargs="+", default=["qwen2.5-vl"])
-    parser.add_argument("--workers", type=int, default=3)
+                        default=os.getenv("API_KEY") or os.getenv("PROXY_API_KEY") or "",
+                        help="Sent as both `Authorization: Bearer` and `X-API-Key`. Leave "
+                             "empty for a local server started without one — an empty value "
+                             "sends no auth header at all")
+    parser.add_argument("--model", nargs="+", default=["qwen2.5-vl"],
+                        help="Model name(s) to ask for, space-separated. Whichever model "
+                             "actually answers is recorded as `served_model`")
+    # No env fallback on purpose, unlike the pipeline's PIPELINE_WORKERS. Concurrency here
+    # is a property of the endpoint you are pointed at right now, not of your machine — a
+    # single-slot llama.cpp wants 1-3 where a vLLM deployment wants 8-16 — and `workers`
+    # rides along in every result because two runs at different values are not comparable
+    # on latency. A set-and-forget default would work against both.
+    parser.add_argument("--workers", type=int, default=3,
+                        help="Concurrent requests (default: 3). On a single-slot server "
+                             "extra workers add queue wait, not throughput; every latency "
+                             "figure in the result was measured at this value")
     parser.add_argument("--description-index", type=int, nargs="+", default=[0],
                         metavar="N",
                         help="Which of the labeling pipeline's three phrasings to ask: "
@@ -2097,8 +2114,14 @@ def main():
                              "carried over untouched; only the coordinates and the pass/fail "
                              "drawn from them are recomputed. Writes a new -RESCORED- file "
                              "and never overwrites the input.")
-    parser.add_argument("--output-dir", default=str(REPO_ROOT / "benchmark-results"))
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--output-dir", default=str(REPO_ROOT / "benchmark-results"),
+                        help="Where result JSON files and resume checkpoints go "
+                             "(default: benchmark-results/)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Load and validate the dataset, print how many requests a real "
+                             "run would make, then stop. Contacts no endpoint and costs "
+                             "nothing. Note it checks that the images directory exists, not "
+                             "that the images are in it")
     args = parser.parse_args()
 
     # Deduped and sorted so the set is canonical: it goes into the checkpoint header and
