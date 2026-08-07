@@ -29,8 +29,6 @@
     "iou_threshold": 0.5,
     "centroid_pass_count": 26342,
     "centroid_accuracy": 0.8519,
-    "click_pass_count": 26342,
-    "click_accuracy": 0.8519,
     "point_only_count": 0,
     "clamped_pred_count": 315,
     "by_description": {

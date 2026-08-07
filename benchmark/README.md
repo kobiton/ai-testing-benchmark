@@ -478,7 +478,6 @@ the sample size.
     "iou_pass_count": 15211, "iou_accuracy": 0.4919,
     "mean_iou": 0.4621, "median_iou": 0.4931, "iou_threshold": 0.5,
     "centroid_pass_count": 26342, "centroid_accuracy": 0.8519,
-    "click_pass_count": 26342, "click_accuracy": 0.8519,
     "point_only_count": 0,
     "bbox_count": 30921, "bbox_coverage": 1.0, "iou_accuracy_given_bbox": 0.4919,
     "clamped_pred_count": 315,
@@ -522,9 +521,9 @@ the sample size.
 }
 ```
 
-`click_pass_count` / `click_accuracy` / `click_inside` are aliases of the centroid fields, kept so
-older result files keep working. `pred_point` is set instead of `pred_bbox` when the model returned a
-bare click point.
+`click_inside` and `pass_centroid` are the same value under two names — the centroid metric. Despite
+reading like the spare one, `click_inside` is the older name and the one the scoring counts, so both
+are written. `pred_point` is set instead of `pred_bbox` when the model returned a bare click point.
 
 Two per-row fields exist so a result can be re-scored later without the images and without guessing:
 

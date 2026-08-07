@@ -1054,8 +1054,12 @@ def _benchmark_element(
         "pred_point": pred_point,
         "iou": round(iou, 4),
         "pass_iou": pass_iou,
-        "click_inside": click_inside,     # kept for backward compat
-        "pass_centroid": click_inside,    # centroid metric — the primary one
+        # Two names for the centroid metric, the primary one. `click_inside` is the older
+        # name and, despite reading like the alias, is the one `build_result` counts and
+        # the one the viewer's compare table reads without a fallback — so it is not
+        # spare. `pass_centroid` is the name to use in new code.
+        "click_inside": click_inside,
+        "pass_centroid": click_inside,
         "error": error,
         "latency_ms": round(latency_ms, 1),
         # Token counts for the cost-versus-accuracy comparison, and the model's own
@@ -1523,12 +1527,9 @@ def build_result(
         "mean_iou": round(statistics.mean(ious), 4) if ious else 0,
         "median_iou": round(statistics.median(ious), 4) if ious else 0,
         "iou_threshold": IOU_THRESHOLD,
-        # Centroid metric (centroid of predicted bbox inside gt bbox). click_* kept
-        # as aliases for backward compatibility with older result files / UI.
+        # Centroid metric: centroid of the predicted bbox inside the gt bbox.
         "centroid_pass_count": pass_click,
         "centroid_accuracy": centroid_accuracy,
-        "click_pass_count": pass_click,
-        "click_accuracy": centroid_accuracy,
         "point_only_count": point_only,
         # Did it answer in the requested shape, and were those shapes any good — see above.
         # `bbox_count` is spelled out rather than left as a subtraction because the errored

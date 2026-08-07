@@ -30,8 +30,6 @@
     "iou_threshold": 0.5,
     "centroid_pass_count": 27149,
     "centroid_accuracy": 0.878,
-    "click_pass_count": 27149,
-    "click_accuracy": 0.878,
     "point_only_count": 26243,
     "bbox_count": 4674,
     "bbox_coverage": 0.1512,
