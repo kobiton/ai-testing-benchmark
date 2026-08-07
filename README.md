@@ -78,6 +78,11 @@ Python 3.9+, and an OpenAI-compatible endpoint serving a vision model.
 git clone https://github.com/kobiton/ai-testing-benchmark.git
 cd ai-testing-benchmark
 
+# The venv is worth the two seconds: it keeps pip and python the same interpreter. If they
+# differ — pyenv, conda, a system python — the install lands where python will not look
+# for it, and the script exits on its first import having created nothing and printed no
+# log, which reads as "the command did nothing" rather than as a missing dependency.
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 # Validate the dataset and write a result file — calls no model, costs nothing
