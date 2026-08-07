@@ -203,12 +203,7 @@ figure, with the bias stated rather than corrected.
 rules into it would coach models toward the labeller's answer and measure agreement with our
 annotator rather than element localisation.
 
-**Five summary fields decide whether an accuracy means anything at all**: `bbox_coverage`,
-`scale_check`, `clamped_pred_count`, `workers` and `elements_with_token_counts`. Each exists
-because a number was once believed that should not have been —
-[`benchmark/README.md`](benchmark/README.md) has the story on every one.
-
-### If you are scoring your own model, read this first
+### Check your model's coordinate scale before the full run
 
 **Which coordinate scale a model answers on is a property of the model, and it cannot be recovered
 from a single answer.** On a 1080×2400 screenshot `[67, 91]` is a legal pixel pair *and* a legal
