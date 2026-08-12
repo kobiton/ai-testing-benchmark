@@ -105,14 +105,18 @@ python benchmark/run_vision_benchmark.py \
     --description-index 0 1 2
 ```
 
-Output lands in `benchmark-results/vision-<model>-<timestamp>.json`.
+Output lands in `benchmark-results/vision-<model>-GT-<dataset>-<timestamp>.json`. Anything that
+makes a number mean something narrower — a `--limit` pilot, a stopped run, an endpoint that
+answered as a different model — is marked in the filename too;
+[`benchmark/README.md`](benchmark/README.md) lists them.
 
 ---
 
 ## Endpoint recipes
 
-Any server exposing `POST /v1/chat/completions` with image content works. `--api-key` is sent as
-**both** `Authorization: Bearer` and `X-API-Key`, and omitted entirely when empty.
+Any server exposing `POST /v1/chat/completions` with image content works out of the box.
+`--api-key` is then sent as **both** `Authorization: Bearer` and `X-API-Key` — servers disagree
+about which they read — and omitted entirely when empty.
 
 **vLLM**
 
@@ -135,13 +139,24 @@ llama-server -m Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf --mmproj mmproj.gguf --ctx-si
 python benchmark/run_vision_benchmark.py --base-url http://localhost:8080 --model qwen2.5-vl
 ```
 
-**A hosted API** — anything OpenAI-shaped, as a strong baseline to compare a self-hosted model
-against:
+**A hosted API** — a strong baseline to compare a self-hosted model against. These need
+`--api-flavor`, which is **never inferred from the URL**: the same base URL can front either shape,
+and guessing wrong fails per element in a way that reads like a model problem.
 
 ```bash
-python benchmark/run_vision_benchmark.py \
+# OpenAI — Bearer auth, and `max_completion_tokens` in place of `max_tokens`
+python benchmark/run_vision_benchmark.py --api-flavor openai \
     --base-url https://api.openai.com --api-key "$OPENAI_API_KEY" --model gpt-4o --limit 200
+
+# Anthropic — a different path (/v1/messages), payload and response shape
+python benchmark/run_vision_benchmark.py --api-flavor anthropic \
+    --base-url https://api.anthropic.com --api-key "$ANTHROPIC_API_KEY" \
+    --model claude-opus-4-5 --limit 200
 ```
+
+> **Pilot first.** A full run is 30,921 requests and the screenshot is essentially the whole input
+> at ~3,500 tokens each. `--limit 200` is deterministic and evenly spread, so the pilot and the
+> full run are comparable.
 
 > **Context size.** A 1080×2400 screenshot is ~3,300 image tokens on a patch-based vision model,
 > which overflows a 4,096-token context on its own. `the request exceeds the available context
@@ -219,10 +234,28 @@ well-formed:
 
 So: **pilot 200 elements and read `summary.scale_check` before trusting anything.** If it flags,
 find the model's convention from its model card, add it to `COORD_GRIDS` in
-`benchmark/run_vision_benchmark.py`, and re-score the pilot with `--rescore` rather than paying for
+`benchmark/scoring/coords.py`, and re-score the pilot with `--rescore` rather than paying for
 the run twice. `scale_check` flags and never corrects, and `suspect: false` means "no evidence
 here" rather than "correct" — [`benchmark/README.md`](benchmark/README.md) explains why, and how
 the check's sensitivity depends on aspect ratio.
+
+### How you ask for the coordinates changes the score
+
+The other half of the same problem: the grid above is how a model's answer is *read*, and this is
+how it was *asked*. `--prompt-style pixels`, the default, states the image size and asks for integer
+pixels. `--prompt-style normalized` asks for floats in [0, 1] and states no size.
+
+That sounds cosmetic and is not. A model that ignores the instruction is unaffected — Qwen2.5-VL
+answers in pixels either way and the parser rescales — but a model that *obeys* it can be ruined by
+it. On a 10-element pilot one frontier model scored **0/10** under `normalized`, sitting 0.0988 of
+the screen too low on every prediction, and **10/10** under `pixels`. Same model, same screenshots,
+same ground truth.
+
+So `prompt_style` is recorded in every result file, and two runs either side of it are not
+comparable. **Our published self-hosted numbers were measured under `normalized`** and are not
+understated by it, because Qwen ignores the instruction — but GUI-Owl has not been measured under
+`pixels` at all. [`benchmark/README.md`](benchmark/README.md) has the control that splits the cause
+in two.
 
 ### Screenshots go out at full resolution
 
@@ -334,6 +367,8 @@ Two warnings the flags do not carry:
 benchmark/
   run_vision_benchmark.py   the benchmark; --help lists every flag
   README.md                 every metric, every field, and why each exists
+  cli/ engine/ artifacts/   the flags · the run · checkpoint, result JSON, re-scoring
+  model/ scoring/ workload/ the system under test · what an answer means · what gets scored
 pipeline/                   the four labelling steps
 run_pipeline.py             pipeline entrypoint
 data/

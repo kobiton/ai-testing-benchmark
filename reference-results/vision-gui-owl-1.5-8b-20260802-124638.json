@@ -9,6 +9,7 @@
   ],
   "coord_grid": 1000,
   "max_image_dim": 0,
+  "prompt_style": "normalized",
   "max_tokens": 2048,
   "workers": 3,
   "temperature": 0,
@@ -108,5 +109,5 @@
     "p95_latency_ms": 22942.7
   },
   "served_model": "GUI-Owl-1.5-8B-Instruct.Q4_K_M.gguf",
-  "note": "Summary only \u2014 the 30,921 per-prediction rows are omitted. Served by Ollama on an Apple Silicon laptop, so latency figures describe that machine and not a GPU deployment."
+  "note": "Summary only \u2014 the 30,921 per-prediction rows are omitted. Served by Ollama on an Apple Silicon laptop, so latency figures describe that machine and not a GPU deployment. Measured under --prompt-style normalized, which predates the flag: it is the only prompt there was. GUI-Owl answers on a 0-1000 grid and has NOT been measured under --prompt-style pixels, so do not assume these figures carry over to it."
 }
