@@ -2,7 +2,7 @@
 
 The benchmark writes its result file once, at the very end. Without this a kill,
 crash or sleeping laptop discarded the whole run — at 1-5s per element and 10,307
-elements in dataset-v1 that is hours of inference lost at element 9,000.
+elements in the shipped dataset that is hours of inference lost at element 9,000.
 
 One line per finished (element, phrasing) pair, appended the moment it completes. A
 re-run with the same model and dataset skips whatever is already recorded.
@@ -15,9 +15,9 @@ Three rules that matter:
   final pass is reported as an error in the output, same as before.
 - **The served model is pinned in the header.** Swapping the loaded model and
   resuming would blend two models' predictions into one score — the same class of
-  mistake as scoring one loaded model twice under two names. Reading a checkpoint whose
-  served model differs is refused rather than silently discarded, because either choice
-  made silently throws away something the operator cares about.
+  mistake as the 2026-07-21 runs. Reading a checkpoint whose served model differs is
+  refused rather than silently discarded, because either choice made silently throws
+  away something the operator cares about.
 - **The description index is part of the row key, not of the filename.** It used to be
   a `-d0` suffix on the path, which meant a run of `--description-index 0 1 2` opened a
   different file from an earlier run of `0` and re-scored all 10,307 index-0 elements
@@ -35,7 +35,7 @@ META_KEY = "__meta__"
 
 
 def path_for(output_dir, dataset_path: str, model: str) -> Path:
-    """One checkpoint per (dataset, model) pair.
+    """One checkpoint per (dataset, model).
 
     Not keyed on --limit: an even-stride subset is drawn from the same rows, so a
     2,000-element run's results are reusable by a later full run. Not keyed on the
@@ -74,16 +74,13 @@ def read(path: Path) -> tuple[list, set, dict]:
         results.append(entry)
 
     done = {key_of(r) for r in results}
-    logger.info("Resuming from %s — %d (element, phrasing) pair(s) already scored",
-                path, len(done))
+    logger.info("Resuming from %s — %d (element, phrasing) pair(s) already scored",path, len(done))
     return results, done, meta
 
 
 def append(path: Path, meta: dict, result: dict) -> None:
     """Append one finished (element, phrasing) pair, writing the header on a new file.
-
-    Called only from the `as_completed` loop, which is single-threaded, so no lock
-    is needed.
+    Called only from the `as_completed` loop, which is single-threaded, so no lock is needed.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     new = not path.exists()
