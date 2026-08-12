@@ -11,9 +11,9 @@ result nothing can read, and everything downstream reads this file rather than t
 checkpoint.
 
 Several fields exist only to stop a number being believed too easily — `bbox_coverage`,
-`clamped_pred_count`, `scale_check`, `elements_with_token_counts`. The reasoning for each
-is in `benchmark/README.md` under "Output JSON format". They are cheap to compute and were
-each added after a figure was misread.
+`clamped_pred_count`, `scale_check`, `offset_check`, `elements_with_token_counts`. The
+reasoning for each is in `benchmark/README.md` under "Output JSON format". They are cheap
+to compute and were each added after a figure was misread.
 """
 import logging
 import statistics
@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from benchmark.artifacts import checkpoint
 from benchmark.scoring.coords import _normalize_model_name
-from benchmark.scoring.metrics import IOU_THRESHOLD, _scale_check
+from benchmark.scoring.metrics import IOU_THRESHOLD, _offset_check, _scale_check
 from benchmark.model.client import _TEMPERATURE_REJECTED
 from benchmark.workload.phrasings import _expand_pairs, _style_of
 
@@ -47,6 +47,15 @@ def build_result(
     stopped_early: bool = False,
     checkpoint_path: str = "",
     coord_grid: int = 0,
+    # Keyword-only and **required**, alone among these. Every other parameter has a
+    # defensible default; this one does not, because it describes what already happened
+    # rather than what to do. A default here would be a guess stamped into an artifact as
+    # fact — and whichever value it took would be wrong for someone: `normalized` mislabels
+    # every run since the default changed, `pixels` mislabels every run before it. All
+    # three call sites already pass it, so requiring it costs nothing and closes the only
+    # way a result can claim a prompt it did not use.
+    *,
+    prompt_style: str,
 ) -> dict:
     """Score `results` and shape them into the result file.
 
@@ -101,6 +110,7 @@ def build_result(
         r["pred_bbox"]["width"], r["pred_bbox"]["height"]) >= 0.999)
 
     scale_check = _scale_check(results)
+    offset_check = _offset_check(results)
 
     iou_accuracy = round(pass_iou / total, 4) if total else 0
     centroid_accuracy = round(pass_centroid / total, 4) if total else 0
@@ -212,6 +222,11 @@ def build_result(
         # Read this before believing a low accuracy — see `_scale_check`. Omitted when
         # there was nothing to predict against.
         **({"scale_check": scale_check} if scale_check else {}),
+        # Which *direction* the model is wrong in, which the accuracies above cannot say
+        # and `scale_check` is structurally blind to. This is the block that turns "Opus
+        # scores 0%" into "Opus aims 0.10 of the screen too low and draws boxes 1.6x too
+        # tall" — a model weakness that can be reported and acted on. See `_offset_check`.
+        **({"offset_check": offset_check} if offset_check else {}),
         # Both omitted entirely on a single-phrasing run, where they would only restate
         # the figures above: `by_description` would hold one entry copying the summary,
         # and `any`/`all` would both equal the accuracy. Absent means "not measured".
@@ -317,6 +332,12 @@ def build_result(
         # coordinate in the file, so two runs at different values are not comparable and
         # a reader has no way to know which they are holding without it. See COORD_GRIDS.
         "coord_grid": coord_grid,
+        # Which coordinate format the model was asked for, and whether it was told the
+        # image size. This changes the score more than anything else recorded here: on a
+        # 10-element pilot a frontier model scored 0/10 under `normalized` and 9/10 under
+        # `pixels`, same model, same images, same ground truth. Two runs that differ only
+        # by it are otherwise distinguishable in this directory by timestamp alone.
+        "prompt_style": prompt_style,
         # Part of what error_count means: a run whose cap was too low for a thinking
         # model records truncations as errors, so the cap has to be readable off the
         # artifact to tell that apart from a model that answers badly.
@@ -356,6 +377,7 @@ def finalize_from_checkpoint(
     temperature: float,
     output_dir: str,
     dataset_path: str,
+    prompt_style: str = "pixels",
 ) -> dict:
     """Rebuild a result file from an existing checkpoint, calling no model at all.
 
@@ -367,7 +389,7 @@ def finalize_from_checkpoint(
     `--limit` still applies, because the checkpoint is not keyed on it and may hold
     elements from a wider run.
     """
-    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model)
+    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style)
     resumed, _done, meta = checkpoint.read(ckpt)
     if not resumed:
         logger.error("No checkpoint at %s — nothing to finalize.", ckpt)
@@ -404,6 +426,9 @@ def finalize_from_checkpoint(
     # Reading it off the command line would let a recovered file claim a convention its
     # own numbers were not scored under.
     coord_grid = meta.get("coord_grid", 0) or 0
+    # Same rule again, and the default is a fact rather than a guess: a checkpoint written
+    # before --prompt-style existed can only have come from the one prompt there was.
+    prompt_style = meta.get("prompt_style") or "normalized"
 
     logger.info("Finalizing %d of %d selected (element, phrasing) pair(s) from %s",
                 len(results), len(pairs), ckpt)
@@ -421,6 +446,7 @@ def finalize_from_checkpoint(
         workers=workers,
         temperature=temperature,
         coord_grid=coord_grid,
+        prompt_style=prompt_style,
         unique_elements=len(dataset),
         selected_elements=len(pairs),
         stopped_early=True,

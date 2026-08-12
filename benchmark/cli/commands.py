@@ -110,7 +110,8 @@ def main():
     # result files and a comparison table of one model against itself.
     if len(args.model) > 1 and not args.dry_run and not args.finalize_only:
         with httpx.Client() as probe_client:
-            loaded = _list_loaded_models(probe_client, args.proxy_url, args.api_key)
+            loaded = _list_loaded_models(probe_client, args.proxy_url, args.api_key,
+                                         args.api_flavor)
         if len(loaded) == 1:
             logger.error(
                 "Asked to benchmark %d models but the endpoint has exactly one loaded "
@@ -133,6 +134,10 @@ def main():
                 max_tokens=args.max_tokens,
                 workers=args.workers,
                 temperature=args.temperature,
+                # Which checkpoint to recover: they fork by style, so --finalize-only has
+                # to be told the same --prompt-style the dead run used or it rebuilds the
+                # wrong one — or, more often, finds nothing and exits.
+                prompt_style=args.prompt_style,
                 output_dir=str(output_dir.resolve()),
                 dataset_path=str(dataset_path),
             )
@@ -153,6 +158,8 @@ def main():
                 dataset_path=str(dataset_path),
                 no_resume=args.no_resume,
                 coord_grid=args.coord_grid,
+                api_flavor=args.api_flavor,
+                prompt_style=args.prompt_style,
             )
         result["dataset_path"] = str(dataset_path)
         ckpt_path = result.pop("checkpoint_path", "")
@@ -177,6 +184,23 @@ def main():
         # stopped at 12% otherwise looks exactly like one that finished.
         if stopped_early:
             safe_model = f"{safe_model}-PARTIAL"
+        # A `--limit` run that reaches the end is not `stopped_early`, so until this it
+        # carried no mark at all: a 50-element pilot and a 10,307-element run sat in the
+        # dropdown under the same shape of name, and the first cross-scoring pilot did
+        # exactly that beside the two full runs. The count, not a bare tag, because the
+        # question a pilot's number raises is how many it is over.
+        if was_limited:
+            safe_model = f"{safe_model}-PILOT-{len(dataset)}"
+        # Which ground truth the score is against. Unlike the infixes above this one is
+        # unconditional, because there is no single obvious ground truth for it to stay
+        # quiet about: `--dataset` points at the shipped corpus by default but at whatever
+        # you labelled yourself the moment you use the pipeline, and cross-scoring one
+        # labeller's dataset with another model is a normal thing to do. Which labels a
+        # score was graded on is then the difference between two files rather than a
+        # footnote. The leading `dataset-` is dropped as noise: the file it names is one.
+        gt_stem = Path(dataset_path).name.removesuffix(".jsonl")
+        gt_stem = gt_stem[len("dataset-"):] if gt_stem.startswith("dataset-") else gt_stem
+        safe_model = f"{safe_model}-GT-{gt_stem.replace('/', '-').replace(':', '-')}"
         out_path = output_dir / f"vision-{safe_model}-{date_str}.json"
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)

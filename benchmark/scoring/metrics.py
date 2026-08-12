@@ -107,3 +107,60 @@ def _scale_check(results: list) -> dict:
         "axes_disagree": axes_disagree,
         "suspect": bool(enough and (off_band or axes_disagree)),
     }
+
+
+def _offset_check(results: list) -> dict:
+    """Which *way* is the model wrong: displaced, mis-sized, or just scattered?
+
+    `_scale_check` above compares the median of *positions*, which catches a wrong divisor
+    and little else — shifting a whole distribution barely moves a ratio of medians. It is
+    therefore blind to a model that finds every element but places it consistently low, and
+    that is not hypothetical: a frontier model asked for normalized floats put its
+    predictions ~0.10 of the screen height too low on every one of them, and `scale_check`
+    reported `y_ratio` 0.857 — inside its 0.8-1.25 band, `suspect: false`. This takes the
+    median of the *per-element difference* instead, which is where a constant bias lives.
+
+    Three faults that all arrive as a low accuracy, told apart here:
+
+    * **Displacement** — `median_dx`/`median_dy` far from 0. A fixed aim error. Signed on
+      purpose: the sign says which way, and a fix is cheap once the direction is known.
+    * **Scatter** — the signed medians near 0 while `median_abs_*` is large. The model is
+      wrong in no particular direction, i.e. it is not finding the element. Both are
+      reported because the signed figure alone cannot distinguish this from being right.
+    * **Mis-sizing** — the box lands on the element but is the wrong size.
+      `median_height_ratio` 1.60 means boxes 60% too tall; 0.82 means 18% too short. This
+      is what separates "centroid passes, IoU fails" into a cause.
+
+    Position uses `_predicted_centroid`, so a click-point model is measured too; the size
+    ratios necessarily cover only the rows that returned a box.
+    """
+    pairs = [(_predicted_centroid(r), r["gt_bbox"]) for r in results
+             if _predicted_centroid(r) and r.get("gt_bbox")]
+    if not pairs:
+        return {}
+    dx = [p[0] - (g["x"] + g["width"] / 2) for p, g in pairs]
+    dy = [p[1] - (g["y"] + g["height"] / 2) for p, g in pairs]
+
+    boxes = [r for r in results if r.get("pred_bbox") and r.get("gt_bbox")]
+    w_ratio = [r["pred_bbox"]["width"] / r["gt_bbox"]["width"]
+               for r in boxes if r["gt_bbox"]["width"]]
+    h_ratio = [r["pred_bbox"]["height"] / r["gt_bbox"]["height"]
+               for r in boxes if r["gt_bbox"]["height"]]
+
+    out = {
+        "predictions": len(pairs),
+        # Signed: predicted centre minus ground-truth centre, in screen fractions.
+        # Positive x = too far right, positive y = too far down.
+        "median_dx": round(statistics.median(dx), 4),
+        "median_dy": round(statistics.median(dy), 4),
+        # Magnitude. Read beside the signed pair: near-zero signed with a large absolute
+        # is scatter, not bias, and the two call for completely different responses.
+        "median_abs_dx": round(statistics.median([abs(v) for v in dx]), 4),
+        "median_abs_dy": round(statistics.median([abs(v) for v in dy]), 4),
+    }
+    if w_ratio:
+        out["boxes"] = len(w_ratio)
+        out["median_width_ratio"] = round(statistics.median(w_ratio), 4)
+    if h_ratio:
+        out["median_height_ratio"] = round(statistics.median(h_ratio), 4)
+    return out

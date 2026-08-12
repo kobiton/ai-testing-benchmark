@@ -2,12 +2,16 @@
 
 Separated from dispatch because the flags are the harness's public contract while what
 happens next is internal. The help text carries the reasoning for the non-obvious
-defaults (`--max-image-dim 0`, `--metric centroid`, `--description-index 0`), so read it
-before changing one — the README calls `--help` the place every flag is listed.
+defaults (`--max-image-dim 0`, `--metric centroid`, `--description-index 0`,
+`--prompt-style pixels`), so read it before changing one — the README calls `--help`
+the place every flag is listed.
 """
 import argparse
 import os
 from pathlib import Path
+
+from benchmark.model.client import API_FLAVORS
+from benchmark.model.prompts import PROMPT_STYLES
 
 # This file is <repo>/benchmark/cli/args.py, so the root is three levels up. Every path
 # default is built from this rather than from the caller's CWD: `python
@@ -37,16 +41,17 @@ def build_parser() -> argparse.ArgumentParser:
                         default=os.getenv("BASE_URL") or os.getenv("PROXY_URL")
                         or "http://localhost:8080",
                         help="Base URL of an OpenAI-compatible server; /v1/chat/completions "
-                             "is appended")
+                             "is appended (/v1/messages under --api-flavor anthropic)")
     # Empty by default, which is right for a local vLLM/llama.cpp/Ollama started without
     # one — `_auth_headers` then sends no auth header at all. Deliberately does NOT fall
     # back to OPENAI_API_KEY: that would forward a hosted credential to whatever
     # --base-url happens to point at.
     parser.add_argument("--api-key",
                         default=os.getenv("API_KEY") or os.getenv("PROXY_API_KEY") or "",
-                        help="Sent as both `Authorization: Bearer` and `X-API-Key`. Leave "
-                             "empty for a local server started without one — an empty value "
-                             "sends no auth header at all")
+                        help="On the default `proxy` flavor, sent as both "
+                             "`Authorization: Bearer` and `X-API-Key`. Leave empty for a "
+                             "local server started without one — an empty value sends no "
+                             "auth header at all")
     parser.add_argument("--model", nargs="+", default=["qwen2.5-vl"],
                         help="Model name(s) to ask for, space-separated. Whichever model "
                              "actually answers is recorded as `served_model`")
@@ -85,7 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--thinking-budget", type=int, default=-1,
                         help="budget_tokens for chain-of-thought models (Qwen3/Gemma4). "
                              "Set to 0 to disable thinking (faster but less accurate). "
-                             "Default -1 leaves the model's own default unchanged.")
+                             "Default -1 leaves the model's own default unchanged. Sent "
+                             "only on --api-flavor proxy, the only shape that accepts it.")
     parser.add_argument("--max-image-dim", type=int, default=0,
                         help="Downscale the longest side to this before sending. Default 0 "
                              "sends the original: the benchmark's job is to measure how well "
@@ -121,7 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "exit, without benchmarking anything. Recovers a run "
                              "that was killed before it could write its results — "
                              "the output is marked PARTIAL. Same --dataset, --model, "
-                             "--limit and --description-index as the run that died.")
+                             "--limit, --prompt-style and --description-index as the run "
+                             "that died.")
     parser.add_argument("--coord-grid", type=int, default=-1, metavar="N",
                         help="Divide the model's pixel-scale answers by N on both axes "
                              "instead of by the screenshot's dimensions, for a model that "
@@ -142,6 +149,26 @@ def build_parser() -> argparse.ArgumentParser:
                              "carried over untouched; only the coordinates and the pass/fail "
                              "drawn from them are recomputed. Writes a new -RESCORED- file "
                              "and never overwrites the input.")
+    parser.add_argument("--api-flavor", choices=list(API_FLAVORS), default="proxy",
+                        help="Which dialect the endpoint speaks. 'proxy' (default) is the "
+                             "OpenAI request shape sent with both auth headers — vLLM, "
+                             "llama.cpp, Ollama and most gateways all take it. 'openai' is "
+                             "the same shape with a Bearer token and "
+                             "`max_completion_tokens`, which api.openai.com's current "
+                             "models require in place of `max_tokens`. 'anthropic' is the "
+                             "Messages API: different path, payload and response. NOT "
+                             "inferred from the URL, because the same base URL can front "
+                             "either shape and guessing wrong fails per element in a way "
+                             "that reads like a model problem.")
+    parser.add_argument("--prompt-style", choices=list(PROMPT_STYLES), default="pixels",
+                        help="How the model is asked for coordinates. 'pixels' (default) "
+                             "states the image size and asks for integer pixels; "
+                             "'normalized' asks for floats in [0,1] and does not state the "
+                             "size. The parser handles both. This changes the score more "
+                             "than anything else here — a model that obeys the float "
+                             "instruction can score 0%% under one and 100%% under the "
+                             "other — so it is recorded in the result and checkpoints do "
+                             "not cross between styles.")
     parser.add_argument("--output-dir", default=str(REPO_ROOT / "benchmark-results"),
                         help="Where result JSON files and resume checkpoints go "
                              "(default: benchmark-results/)")

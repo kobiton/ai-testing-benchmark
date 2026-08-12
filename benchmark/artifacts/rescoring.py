@@ -200,6 +200,11 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
         workers=prior.get("workers", 0),
         temperature=prior.get("temperature", 0),
         coord_grid=coord_grid,
+        # Off the original file, never off this process: a rescore re-parses `raw` and
+        # calls no model, so it cannot change which prompt produced these answers. A file
+        # predating the field was run when `normalized` was the only prompt, so the
+        # default states a fact rather than guessing one.
+        prompt_style=prior.get("prompt_style") or "normalized",
         unique_elements=summary.get("unique_elements")
         or len({(r.get("screenshot_id"), r.get("element_id")) for r in out_rows}),
         selected_elements=summary.get("selected_elements") or len(out_rows),

@@ -34,17 +34,30 @@ logger = logging.getLogger(__name__)
 META_KEY = "__meta__"
 
 
-def path_for(output_dir, dataset_path: str, model: str) -> Path:
-    """One checkpoint per (dataset, model).
+def path_for(output_dir, dataset_path: str, model: str,
+             prompt_style: str = "pixels") -> Path:
+    """One checkpoint per (dataset, model, prompt style).
 
     Not keyed on --limit: an even-stride subset is drawn from the same rows, so a
     2,000-element run's results are reusable by a later full run. Not keyed on the
     description index either — that lives in each row, so phrasings accumulate into
     one file instead of forking it. See the module docstring.
+
+    **It is keyed on the prompt style**, because those rows are not reusable: the answers
+    came from a different question. Sharing the file meant a second run under another
+    style resumed from the first, skipped every element, and reported the first run's
+    predictions as its own — silently, since a full resume prints only "N already scored".
+    On the pilot that motivated the flag that would have turned 0/10 into 9/10 or the
+    reverse, purely from which run went first.
+
+    `normalized` is spelled into no suffix at all so every checkpoint written before the
+    flag existed keeps its path — those runs are all `normalized` by definition, so the
+    omission is accurate rather than a compatibility hack.
     """
     safe_model = model.replace("/", "-").replace(":", "-")
     stem = Path(dataset_path).stem
-    return Path(output_dir) / "checkpoints" / f"{stem}-{safe_model}.partial.jsonl"
+    suffix = "" if prompt_style == "normalized" else f"-{prompt_style}"
+    return Path(output_dir) / "checkpoints" / f"{stem}-{safe_model}{suffix}.partial.jsonl"
 
 
 def key_of(row: dict) -> tuple:

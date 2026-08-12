@@ -21,18 +21,19 @@ from typing import Optional
 import httpx
 
 from benchmark.model.images import _load_image_b64
-from benchmark.model.prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from benchmark.model.prompts import USER_PROMPT_TEMPLATE, system_prompt_for
 from benchmark.scoring.coords import _norm_dims
 from benchmark.scoring.parsing import _parse_response
 
 logger = logging.getLogger(__name__)
 
 
-def _list_loaded_models(client: httpx.Client, proxy_url: str, api_key: str) -> list:
+def _list_loaded_models(client: httpx.Client, proxy_url: str, api_key: str,
+                        api_flavor: str = "proxy") -> list:
     """Model ids the endpoint admits to having. Empty list if it won't say."""
     try:
         resp = client.get(f"{proxy_url.rstrip('/')}/v1/models",
-                          headers=_auth_headers(api_key), timeout=15)
+                          headers=_auth_headers(api_flavor, api_key), timeout=15)
         if resp.status_code != 200:
             return []
         return [m["id"] for m in resp.json().get("data", []) if m.get("id")]
@@ -42,7 +43,7 @@ def _list_loaded_models(client: httpx.Client, proxy_url: str, api_key: str) -> l
 
 
 def _probe_served_model(client: httpx.Client, proxy_url: str, api_key: str,
-                        model: str) -> str:
+                        model: str, api_flavor: str = "proxy") -> str:
     """Ask for `model` and report which model actually answers.
 
     A single-model server (llama.cpp serving one .gguf) does not route by name: it
@@ -54,16 +55,21 @@ def _probe_served_model(client: httpx.Client, proxy_url: str, api_key: str,
 
     Against a hosted provider this is a formality — they route by name and echo it
     back — but it is still worth the one token, because it is also the cheapest possible
-    check that the key and the model id are both right before a run that costs real
-    money starts.
+    check that the key, the flavor and the model id are all right before a run that
+    costs real money starts.
     """
+    # 16, not 1. A reasoning model spends the cap before it emits anything, and OpenAI
+    # answers a cap it cannot finish under with a 400 rather than a truncated reply —
+    # measured: `max_completion_tokens: 1` is a 400 on a current GPT model, 16 is a 200.
+    # The probe only needs the response's `model` field, so the extra tokens cost nothing
+    # worth counting once per run.
     ping = {"model": model, "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1}
+            _MAX_TOKENS_KEY.get(api_flavor, "max_tokens"): 16}
     try:
         resp = client.post(
-            f"{proxy_url.rstrip('/')}/v1/chat/completions",
+            _endpoint_url(api_flavor, proxy_url),
             json=ping,
-            headers=_auth_headers(api_key), timeout=30,
+            headers=_auth_headers(api_flavor, api_key), timeout=30,
         )
         if resp.status_code != 200:
             logger.debug("Probe returned HTTP %d: %s", resp.status_code, resp.text[:200])
@@ -95,8 +101,8 @@ RAW_RESPONSE_CHARS = 0
 # straight into digit tokens, where a flip turns x=432 into x=332.
 #
 # Hosted frontier models reject it outright: GPT-5.x answers "Unsupported value:
-# 'temperature' does not support 0.0 with this model", and recent Claude models return 400
-# for any non-default value. Since the README documents pointing this script at
+# 'temperature' does not support 0.0 with this model", and Claude Opus 4.7 and later return
+# 400 for any non-default value. Since the README documents pointing this script at
 # api.openai.com for a baseline, an unconditional temperature would fail every element of
 # that run. Dropping it for the run instead costs reproducibility on that endpoint only,
 # which is the lesser loss and is recorded in the result.
@@ -117,35 +123,92 @@ def _temperature_rejected(resp) -> bool:
         return False
 
 
-def _auth_headers(api_key: str) -> dict:
-    """Both auth conventions, because the endpoints this runs against disagree.
+# Which dialect the endpoint speaks. Not inferred from the URL: the same base URL can front
+# either shape, and guessing wrong fails per-element in a way that reads like a model problem.
+FLAVOR_PROXY = "proxy"          # vLLM, llama.cpp, Ollama, gateways — OpenAI shape, both headers
+FLAVOR_OPENAI = "openai"        # api.openai.com — OpenAI shape, Bearer, max_completion_tokens
+FLAVOR_ANTHROPIC = "anthropic"  # api.anthropic.com — Messages API, its own everything
+API_FLAVORS = (FLAVOR_PROXY, FLAVOR_OPENAI, FLAVOR_ANTHROPIC)
 
-    `Authorization: Bearer` is the OpenAI-compatible standard and is what vLLM
-    (`--api-key`), llama.cpp (`--api-key`), Ollama, OpenAI and every hosted gateway
-    read. `X-API-Key` is what some self-hosted proxies use instead. Sending both costs
-    one header and means the same command works against any of them; a server that does
-    not recognise one simply ignores it.
+ANTHROPIC_VERSION = "2023-06-01"
+
+# What each provider calls the output cap. OpenAI renamed it and rejects the old name on
+# its current models; vLLM and llama.cpp only know the old one. Anthropic has always used
+# `max_tokens` and requires it. Found by calling the real API — a stub that accepts
+# `max_tokens` everywhere passes and proves nothing.
+_MAX_TOKENS_KEY = {FLAVOR_OPENAI: "max_completion_tokens"}
+
+
+def _auth_headers(flavor: str, api_key: str) -> dict:
+    """The header each provider authenticates with.
+
+    The default `proxy` flavor sends **both** conventions, because the servers it targets
+    disagree about which one they read: `Authorization: Bearer` is the OpenAI-compatible
+    standard used by vLLM (`--api-key`), llama.cpp (`--api-key`), Ollama and every hosted
+    gateway, while `X-API-Key` is what some self-hosted proxies use instead. Sending both
+    costs one header and means the same command works against any of them; a server that
+    does not recognise one simply ignores it.
 
     An empty key sends neither, which is the common local case — llama.cpp, vLLM and
     Ollama started without an API key reject a request carrying `Bearer ` with nothing
     after it on some builds, and have nothing to check on the rest.
+
+    The two named flavors are exact rather than generous, because their providers are:
+    `X-API-Key` means nothing to api.openai.com, and Anthropic requires its own header
+    plus a version.
     """
+    if flavor == FLAVOR_OPENAI:
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if flavor == FLAVOR_ANTHROPIC:
+        return ({"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
+                if api_key else {"anthropic-version": ANTHROPIC_VERSION})
     if not api_key:
         return {}
     return {"Authorization": f"Bearer {api_key}", "X-API-Key": api_key}
 
 
-def _build_payload(model: str, b64: str, media: str, description: str,
+def _endpoint_url(flavor: str, base_url: str) -> str:
+    base = base_url.rstrip("/")
+    return f"{base}/v1/messages" if flavor == FLAVOR_ANTHROPIC else f"{base}/v1/chat/completions"
+
+
+def _build_payload(flavor: str, model: str, b64: str, media: str, description: str,
                    max_tokens: int, thinking_budget: int, temperature: float,
-                   send_temperature: bool) -> dict:
-    """The request body."""
+                   send_temperature: bool, prompt_style: str = "pixels",
+                   img_w: int = 0, img_h: int = 0) -> dict:
+    """The request body, in whichever shape the endpoint expects.
+
+    Anthropic takes the system prompt as a top-level `system` rather than a message, and
+    its image block is `{"type": "image", "source": {...}}` rather than an `image_url`.
+    `budget_tokens` is deliberately **not** sent there: on Anthropic thinking is
+    `{"thinking": {...}}` and a bare `budget_tokens` is an unknown field, i.e. a 400 on
+    every element. `--thinking-budget` was already a no-op against llama.cpp, so it now
+    applies only where it ever did.
+    """
     user_text = USER_PROMPT_TEMPLATE.format(description=description)
+    system_prompt = system_prompt_for(prompt_style, img_w, img_h)
     temp = ({"temperature": temperature} if send_temperature else {})
+
+    if flavor == FLAVOR_ANTHROPIC:
+        return {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64",
+                                                 "media_type": media, "data": b64}},
+                    {"type": "text", "text": user_text},
+                ],
+            }],
+            **temp,
+        }
 
     return {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
@@ -154,13 +217,50 @@ def _build_payload(model: str, b64: str, media: str, description: str,
                 ],
             },
         ],
-        # Four floats need a handful of tokens; the budget is for models that reason
+        # Four numbers need a handful of tokens; the budget is for models that reason
         # first. Measured on Gemma 4 12B: 428-512 output tokens before the array, so 512
         # truncated roughly half of all calls. Default 2048 covers that with headroom.
-        "max_tokens": max_tokens,
-        **({"budget_tokens": thinking_budget} if thinking_budget >= 0 else {}),
+        #
+        # The *name* differs by provider and this was found only by calling the real API:
+        # OpenAI answers "Unsupported parameter: 'max_tokens' is not supported with this
+        # model. Use 'max_completion_tokens' instead." on the current models. vLLM and
+        # llama.cpp know `max_tokens` and not the new spelling, so the split is per flavor
+        # rather than a global rename.
+        _MAX_TOKENS_KEY.get(flavor, "max_tokens"): max_tokens,
+        # `proxy` only. vLLM understands it and llama.cpp ignores it, but OpenAI rejects
+        # an unrecognised argument outright — so on the `openai` flavor this would turn a
+        # flag nobody thinks twice about into a 400 on all 10,307 elements.
+        **({"budget_tokens": thinking_budget}
+           if thinking_budget >= 0 and flavor == FLAVOR_PROXY else {}),
         **temp,
     }
+
+
+def _extract_response(flavor: str, data: dict) -> tuple[str, dict, dict]:
+    """Normalise a reply to `(finish_reason, message_like, usage)` in OpenAI's vocabulary.
+
+    Everything downstream — the truncation check, `_response_meta`, the parser — then has
+    one shape to handle. Anthropic's `stop_reason: "max_tokens"` maps onto OpenAI's
+    `finish_reason: "length"` so the truncation guard, which is what stopped a thinking
+    model's prose being scraped into a bounding box, covers it too.
+    """
+    if flavor != FLAVOR_ANTHROPIC:
+        choice = data["choices"][0]
+        return choice.get("finish_reason", "unknown"), choice["message"], data.get("usage") or {}
+
+    stop = data.get("stop_reason") or "unknown"
+    text = "".join(b.get("text", "") for b in (data.get("content") or [])
+                   if b.get("type") == "text")
+    u = data.get("usage") or {}
+    usage = {
+        "prompt_tokens": u.get("input_tokens", 0) or 0,
+        "completion_tokens": u.get("output_tokens", 0) or 0,
+        # Anthropic reports cache reads separately and excludes them from input_tokens,
+        # so add them back — otherwise a cached element looks cheaper than it was.
+        "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) or 0},
+    }
+    usage["prompt_tokens"] += usage["prompt_tokens_details"]["cached_tokens"]
+    return ("length" if stop == "max_tokens" else stop), {"content": text}, usage
 
 
 def _response_meta(usage: dict, msg: dict) -> dict:
@@ -201,6 +301,8 @@ def _call_model(
     max_tokens: int = 2048,
     temperature: float = 0,
     coord_grid: int = 0,
+    api_flavor: str = FLAVOR_PROXY,
+    prompt_style: str = "pixels",
 ) -> tuple[Optional[dict], Optional[dict], float, str, dict]:
     """
     Returns (pred_bbox or None, pred_point or None, latency_ms, error, meta).
@@ -223,12 +325,14 @@ def _call_model(
     dims = {"img_w": img_w, "img_h": img_h}
 
     payload = _build_payload(
-        model, b64, media, description, max_tokens, thinking_budget, temperature,
+        api_flavor, model, b64, media, description, max_tokens, thinking_budget,
+        temperature,
         # Sent only where it is accepted — see _TEMPERATURE_REJECTED.
         send_temperature=(temperature >= 0 and not _TEMPERATURE_REJECTED.is_set()),
+        prompt_style=prompt_style, img_w=img_w, img_h=img_h,
     )
-    url = f"{proxy_url.rstrip('/')}/v1/chat/completions"
-    headers = _auth_headers(api_key)
+    url = _endpoint_url(api_flavor, proxy_url)
+    headers = _auth_headers(api_flavor, api_key)
 
     t0 = time.monotonic()
     last_err = ""
@@ -274,10 +378,7 @@ def _call_model(
             return None, None, latency_ms, f"HTTP {resp.status_code}: {resp.text[:200]}", dict(dims)
 
         data = resp.json()
-        choice = data["choices"][0]
-        finish = choice.get("finish_reason", "unknown")
-        msg = choice["message"]
-        usage = data.get("usage") or {}
+        finish, msg, usage = _extract_response(api_flavor, data)
 
         # A truncated answer is a failure, not a prediction — check before falling back
         # to reasoning_content. A thinking model spends its whole budget reasoning and

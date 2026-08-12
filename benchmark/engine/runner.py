@@ -73,6 +73,8 @@ def _benchmark_element(
     max_tokens: int = 2048,
     temperature: float = 0,
     coord_grid: int = 0,
+    api_flavor: str = "proxy",
+    prompt_style: str = "pixels",
 ) -> dict:
     screenshot_id = row["screenshot_id"]
     element_id = row["element_id"]
@@ -115,6 +117,7 @@ def _benchmark_element(
     pred_bbox, pred_point, latency_ms, error, meta = _call_model(
         client, proxy_url, api_key, model, image_path, desc, timeout, coord_format,
         thinking_budget, max_image_dim, max_tokens, temperature, coord_grid,
+        api_flavor, prompt_style,
     )
 
     iou = _compute_iou(pred_bbox, gt_bbox) if pred_bbox else 0.0
@@ -176,6 +179,8 @@ def run_benchmark(
     dataset_path: str = "",
     no_resume: bool = False,
     coord_grid: int = -1,
+    api_flavor: str = "proxy",
+    prompt_style: str = "pixels",
 ) -> dict:
     pairs = _expand_pairs(dataset, description_indices)
     styles = ", ".join(_style_of(i) for i in description_indices)
@@ -190,14 +195,14 @@ def run_benchmark(
                 "total_elements": len(pairs), "unique_elements": len(dataset),
                 "results": []}
 
-    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model)
+    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style)
     if no_resume:
         ckpt.unlink(missing_ok=True)
 
     results = []
     with httpx.Client() as client:
-        loaded_models = _list_loaded_models(client, proxy_url, api_key)
-        served_model = _probe_served_model(client, proxy_url, api_key, model)
+        loaded_models = _list_loaded_models(client, proxy_url, api_key, api_flavor)
+        served_model = _probe_served_model(client, proxy_url, api_key, model, api_flavor)
         mismatch = bool(served_model) and (
             _normalize_model_name(model) not in _normalize_model_name(served_model))
         if served_model:
@@ -261,12 +266,18 @@ def run_benchmark(
         # rebuilds a result from this header alone, and the honest value is the one the
         # run actually used, not whatever the flag says whenever someone gets round to
         # recovering it. It also decides whether a truncation counts as an error.
+        # prompt_style belongs here for a sharper reason than the rest: two runs that
+        # differ only by it produce filenames differing only by timestamp, and on a
+        # 10-element pilot one frontier model scored 0/10 under one style and 9/10 under
+        # the other. A result that cannot say which prompt produced it is not attributable
+        # to anything — the same failure as the `served_model` one, one field later.
         meta = {"served_model": served_model, "model": model,
                 "dataset": Path(dataset_path).name,
                 "description_indices": description_indices,
                 "max_tokens": max_tokens,
                 "workers": workers,
                 "temperature": temperature,
+                "prompt_style": prompt_style,
                 "coord_grid": grid}
 
         futures = {}
@@ -277,7 +288,8 @@ def run_benchmark(
                     _benchmark_element,
                     client, proxy_url, api_key, model,
                     row, images_dir, idx, timeout, coord_format,
-                    thinking_budget, max_image_dim, max_tokens, temperature, grid,
+                    thinking_budget, max_image_dim, max_tokens, temperature,
+                    grid, api_flavor, prompt_style,
                 )
                 futures[f] = (row, idx)
 
@@ -321,6 +333,7 @@ def run_benchmark(
         workers=workers,
         temperature=temperature,
         coord_grid=grid,
+        prompt_style=prompt_style,
         unique_elements=len(dataset),
         # Pairs, not elements: `completed_fraction` divides the rows scored by this, and
         # a 3-phrasing run produces three rows per element. Counting elements here would
