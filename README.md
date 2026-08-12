@@ -26,17 +26,47 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 
 ## Results
 
-Two self-hosted models, both **Q4_K_M GGUF served by Ollama on an Apple Silicon Mac mini**, every
-element scored under all three phrasings — 30,921 requests per model.
+Every element scored under all three phrasings, against ground truth this repository ships —
+**30,921 requests** for the three rows scored on the Opus labels, 31,941 for the row scored on the
+GPT-5.6 ones.
 
-| | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element |
-|---|---|---|---|----------------|---|
-| **Qwen2.5-VL-7B-Instruct** | **85.19%** | 49.19% | 0.493 | **100%**       | 3,551 |
-| GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | **15.1%**      | 2,747 |
+| | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element | asked for |
+|---|---|---|---|----------------|---|---|
+| **GPT-5.6** | **95.62%** | **80.21%** | **0.725** | **100%** | 3,063 | pixels |
+| **Claude Opus 4.8** <sup>\*</sup> | 91.99% | 61.56% | 0.616 | **100%** | 3,659 | pixels |
+| **Qwen2.5-VL-7B-Instruct** | 85.19% | 49.19% | 0.493 | **100%**       | 3,551 | floats |
+| GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | **15.1%**      | 2,747 | floats |
 
-**Note:** GUI-Owl's higher centroid is not a better score — it is an answer to a different question. It is an agentic model trained 
+> <sup>\*</sup> **Opus's row covers 14,548 of its 31,941 requests — 46%.** The run did not
+> finish, and what it did cover is a *contiguous* stretch of the dataset rather than an even
+> sample, so read it as an estimate rather than a final figure. The evenly-spread 200-element
+> pilot agrees closely — 90.33% centroid, 61.67% IoU — which is what gives confidence in the
+> direction, not in the third decimal. Finishing it is a `--dataset data/dataset-v1-gpt-5.6.jsonl`
+> run away, and the checkpoint means it resumes rather than starting over.
+
+The two open-weight models are **Q4_K_M GGUF served by Ollama on an Apple Silicon Mac mini**, so
+read their numbers as a quantised laptop deployment rather than as the models' ceiling. GPT-5.6
+and Opus are **cross-labelled**: each is scored against labels the *other* one wrote, so neither is
+graded on its own output. **Both corpora are in this repository** — `data/dataset-v1.jsonl` (Opus)
+and `data/dataset-v1-gpt-5.6.jsonl` (GPT-5.6), the same 841 screenshots labelled twice — so the
+cross-score reproduces from a clone. That is the strongest arrangement available here, but the
+ceiling is still agreement with a strong labeller rather than with a human.
+
+**What the top two rows say together.** Centroid is close — 95.62% against 91.99% — so both find
+the right element most of the time. The gap is in *box quality*: 80.21% of GPT-5.6's predictions
+reach IoU ≥ 0.5 against 61.56% of Opus's. If you need a tap point, the two are near equivalent; if
+you need an accurate bounding box, GPT-5.6 is ahead.
+
+**Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for
+floats in [0, 1], and that is not a free choice — see
+[How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score),
+where the same Opus model scores 7.79% or 90.33% on one 200-element set depending on nothing but
+that. Qwen ignores the instruction and answers in pixels regardless, so its figure is unaffected;
+GUI-Owl answers on a 0–1000 grid and has never been measured under the pixel prompt.
+
+**Note:** GUI-Owl's centroid sitting above Qwen's is not a better score — it is an answer to a different question. It is an agentic model trained 
 to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. A point has no area, so it scores zero on IoU
-by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and the two models are not on
+by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on
 the same leaderboard:
 
 ```
@@ -44,22 +74,32 @@ iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
      2.93%    =     15.1%     ×        19.4%
 ```
 
-Both models were also asked the same element three ways, which turns out to matter more than the
+Every model was also asked the same element three ways, which turns out to matter more than the
 gap between them:
 
-| Phrasing | example | Qwen2.5-VL | GUI-Owl |
-|---|---|---|---|
-| `name` — short common name | *the scan QR code button* | 84.40% | 85.79% |
-| `label` — structural | *the blue button with the text scan QR code* | **88.11%** | **90.34%** |
-| `intent` — functional | *the button that lets the user scan their sign-in QR code* | 83.06% | 87.28% |
+| Phrasing | example | GPT-5.6 | Opus 4.8 <sup>\*</sup> | Qwen2.5-VL | GUI-Owl |
+|---|---|---|---|---|---|
+| `name` — short common name | *the scan QR code button* | 95.72% | 91.45% | 84.40% | 85.79% |
+| `label` — structural | *the blue button with the text scan QR code* | **96.13%** | **93.09%** | **88.11%** | **90.34%** |
+| `intent` — functional | *the button that lets the user scan their sign-in QR code* | 95.00% | 91.42% | 83.06% | 87.28% |
+
+All four find `label` easiest — it is the phrasing that repeats the element's visible text most
+often. Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name`
+hardest.
 
 A single-phrasing headline flatters a model, because `name` is usually the element's visible text
 and `intent` deliberately carries no text handle at all. Scoring all three is what makes the figure
 describe the ways a tester might actually phrase a locator rather than the easiest one.
 
-Full summaries, including token totals and every field described below, are in
-[`reference-results/`](reference-results/). Latency is recorded but describes a laptop, not a GPU
-deployment — do not read it as a production figure.
+**And the average still flatters it.** Averaging the three counts an element as 2-of-3 correct;
+what a test suite needs is the element working *whatever* the tester typed. Of the 10,307 elements,
+**92.48% pass under all three phrasings** for GPT-5.6 against its 95.62% average — so the figure to
+plan reliability against is about three points below the headline, not equal to it.
+
+Full summaries for all four runs — token totals and every field described below — are in
+[`reference-results/`](reference-results/). Latency is recorded but describes a laptop for the
+open-weight rows and a hosted API over the public internet for the other two, so it is not a
+production figure for either.
 
 **[Browse the results screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/)**
 
@@ -166,7 +206,7 @@ python benchmark/run_vision_benchmark.py --api-flavor anthropic \
 
 ## The dataset
 
-`data/dataset-v1.jsonl` — one row per element, coordinates normalised to [0, 1]:
+One row per element, coordinates normalised to [0, 1]:
 
 ```json
 {"screenshot_id": "abc123", "element_id": "e1", "name": "Login", "type": "button",
@@ -176,23 +216,33 @@ python benchmark/run_vision_benchmark.py --api-flavor anthropic \
                   "the button that will allow the user to login to the system"]}
 ```
 
-| | |
-|---|---|
-| Screenshots | 841 Android, 1080×2400 throughout, from 100 public app-store packages |
-| Elements | 10,314 — 12.3 per screenshot |
-| With a bounding box | 10,307 (99.93%) — these are what the benchmark scores |
-| Descriptions | 3 per element (`name` / `label` / `intent`), on every element |
-| Labelled by | Claude Opus 4.8 |
+**The same 841 screenshots are labelled twice, independently, by two different models.** Same
+schema, same `screenshot_id`s, same images — so either file works as `--dataset`, and scoring one
+model against the *other* model's labels is what the cross-score in the results above is.
 
-Screenshots were crawled from **public app-store packages**. Every element was found, boxed and described by a frontier 
-model, then spot-checked before the dataset was accepted.
+| | `dataset-v1.jsonl` | `dataset-v1-gpt-5.6.jsonl` |
+|---|---|---|
+| Labelled by | Claude Opus 4.8 | GPT-5.6 |
+| Elements | 10,314 | 10,647 |
+| With a bounding box | 10,307 (99.93%) | 10,647 (100%) |
+| Screenshots covered | 841 | 839 |
+| Descriptions | 3 per element (`name` / `label` / `intent`) | same |
 
-**Ground truth from a model is a stated limitation, not a hidden one.** It buys 10,307 elements
+The two disagree about *what an element is*, not only about where its box goes: Opus found 10,314
+and GPT-5.6 10,647 on the same screens, and there is **no shared element id to join on**. Treat
+them as two opinions, not as one dataset in two files.
+
+Screenshots are 841 Android, 1080×2400 throughout, crawled from **public app-store packages**.
+Every element was found, boxed and described by a frontier model, then spot-checked before the
+dataset was accepted.
+
+**Ground truth from a model is a stated limitation, not a hidden one.** It buys ~10,000 elements
 instead of the few hundred hand-labelling would have produced, and the box convention is at least
 *consistent*, which is what makes the centroid/IoU split above legible. It also means the ceiling
-here is agreement with a strong labeller, not with a human.
+is agreement with a strong labeller, not with a human — and the second labelling is there so you
+can see how far two strong labellers agree with each other.
 
-Both halves are in the repository — `data/dataset-v1.jsonl` and all 841 PNGs under
+Everything is in the repository: both `.jsonl` files, their stats sidecars, and all 841 PNGs under
 `data/images/`, named `<screenshot_id>.png`. A clone is ~315 MB and is everything the benchmark
 needs; no separate download step required.
 
@@ -247,15 +297,24 @@ pixels. `--prompt-style normalized` asks for floats in [0, 1] and states no size
 
 That sounds cosmetic and is not. A model that ignores the instruction is unaffected — Qwen2.5-VL
 answers in pixels either way and the parser rescales — but a model that *obeys* it can be ruined by
-it. On a 10-element pilot one frontier model scored **0/10** under `normalized`, sitting 0.0988 of
-the screen too low on every prediction, and **10/10** under `pixels`. Same model, same screenshots,
-same ground truth.
+it. Over 200 elements × 3 phrasings, changing nothing else, one frontier model went from **7.79%**
+centroid to **90.33%**:
+
+| same 200 elements, same ground truth | centroid | IoU ≥ 0.5 | median `dy` |
+|---|---|---|---|
+| `normalized` — floats, no image size | 7.79% | 2.27% | +0.0816 |
+| `pixels` — integers, image size stated | **90.33%** | **61.67%** | +0.0004 |
+
+Both runs had zero errors and returned a box on 100% of requests. The model was answering every
+time; under one prompt it was answering in a frame it had never been given — every prediction
+landing ~8% of the screen height too low. That is a harness result, not a model result, and it is
+the single most expensive thing to get wrong here.
 
 So `prompt_style` is recorded in every result file, and two runs either side of it are not
-comparable. **Our published self-hosted numbers were measured under `normalized`** and are not
+comparable. **The two open-weight rows above were measured under `normalized`** and are not
 understated by it, because Qwen ignores the instruction — but GUI-Owl has not been measured under
-`pixels` at all. [`benchmark/README.md`](benchmark/README.md) has the control that splits the cause
-in two.
+`pixels` at all. [`benchmark/README.md`](benchmark/README.md) has the 10-element control that splits
+the cause into its two halves.
 
 ### Screenshots go out at full resolution
 
@@ -372,7 +431,8 @@ benchmark/
 pipeline/                   the four labelling steps
 run_pipeline.py             pipeline entrypoint
 data/
-  dataset-v1.jsonl          the ground-truth labels          ← committed
+  dataset-v1.jsonl          ground truth, labelled by Opus   ← committed
+  dataset-v1-gpt-5.6.jsonl  the same screens, by GPT-5.6     ← committed
   images/                   841 screenshots, <id>.png        ← committed
 reference-results/          our published summaries          ← committed
 ```

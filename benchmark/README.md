@@ -218,14 +218,45 @@ The harness used to ask for floats and state no size. That is a fine request for
 ignores it — Qwen2.5-VL answers in pixels regardless, 5 of 6 raws on a pilot, and the parser
 rescales — and a ruinous one for a model that obeys.
 
-| 10-element pilot, one frontier model | centroid | median `dy` | median `dx` | box height vs GT |
+| 10-element control, one frontier model | centroid | median `dy` | median `dx` | box height vs GT |
 |---|---|---|---|---|
 | `normalized` — floats, no image size | **0/10** | +0.0988 | +0.0256 | 1.41× |
-| `normalized` + the one `IMAGE SIZE` line (control) | 4/10 | +0.0124 | +0.0256 | — |
-| `pixels` — integers, image size stated | **10/10** | +0.0025 | +0.0002 | — |
+| `normalized` + the one `IMAGE SIZE` line | 4/10 | +0.0124 | +0.0256 | — |
+| `pixels` — integers, image size stated | **10/10** | +0.0025 | +0.0002 | 0.82× |
 
 Read the `dx` column against the `dy` one: stating the size fixes most of the *vertical* error and
 does not touch the *horizontal* one at all; asking for integers fixes both.
+
+Ten elements is enough to explain a bad score and to justify changing the default; it is not a
+measurement. So the same model was re-run over **200 elements × 3 phrasings = 600 requests**,
+against `data/dataset-v1-gpt-5.6.jsonl` — the second labelling, so the model is not scored on its
+own output — changing nothing but the coordinate format:
+
+| same 200 elements, same ground truth | centroid | IoU ≥ 0.5 | mean IoU | median `dy` | box height vs GT |
+|---|---|---|---|---|---|
+| `normalized` | 7.79% | 2.27% | 0.047 | +0.0816 | 1.69× |
+| `pixels` | **90.33%** | **61.67%** | **0.547** | +0.0004 | 0.99× |
+
+No errors, and a bounding box on 100% of requests, in **both** runs. The model was answering every
+time; under one prompt it was answering in a frame it had never been given. At full scale — 30,921
+requests — the positional error stays under 0.001 of the screen on both axes, so this is not an
+artefact of the sample size.
+
+Both halves of that are reproducible from a clone:
+
+```bash
+python benchmark/run_vision_benchmark.py --api-flavor anthropic \
+    --base-url https://api.anthropic.com --api-key "$ANTHROPIC_API_KEY" \
+    --model claude-opus-4-5 --dataset data/dataset-v1-gpt-5.6.jsonl \
+    --description-index 0 1 2 --limit 200 --prompt-style normalized
+
+# then the same command with --prompt-style pixels; the checkpoint forks by style,
+# so the second run pays for itself rather than resuming the first
+```
+
+**The model in that table is not the one in the root README's results table**, which is a different
+vendor's and was measured under `pixels` throughout. Two frontier models do not respond to this the
+same way, which is exactly why the style is a flag and is recorded in every result.
 
 Two facts kept this from being read as *"that model is bad at grounding"*, and both are worth
 reproducing before anyone reports on a model from this harness:
@@ -241,10 +272,11 @@ reproducing before anyone reports on a model from this harness:
 
 Consequences that are easy to get wrong:
 
-- **The published self-hosted numbers are not understated.** Qwen's 85.19% and GUI-Owl's 87.80%
+- **The two published open-weight numbers are not understated.** Qwen's 85.19% and GUI-Owl's 87.80%
   were measured under `normalized`, but Qwen ignores the instruction, so its number is unaffected.
   GUI-Owl answers on a 0–1000 grid and **has not been measured under `pixels`** — pilot before
-  assuming either way.
+  assuming either way. The GPT-5.6 row beside them was measured under `pixels`, which is why the
+  results table carries a column saying so.
 - **`prompt_style` is recorded in every result, and defaulted nowhere it describes history.** The
   runtime default is `pixels`; the fallbacks that describe an *existing* artifact (`--rescore`, the
   `--finalize-only` header read) stay `normalized`, because a file predating the flag can only have

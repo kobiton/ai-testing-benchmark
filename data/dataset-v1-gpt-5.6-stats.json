@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-08-04T05:34:46.088608+00:00",
+  "llm_provider": "openai",
+  "model": "gpt-5.6-terra",
+  "total_screenshots": 841,
+  "screenshots_with_elements": 839,
+  "screenshots_with_no_elements": 2,
+  "total_elements": 10647,
+  "elements_with_bbox": 10647,
+  "elements_with_descriptions": 10647,
+  "elements_with_two_descriptions": 10647,
+  "avg_elements_per_screenshot": 12.66
+}

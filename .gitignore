@@ -11,12 +11,17 @@ __pycache__/
 # reference numbers that are meant to be committed live in reference-results/.
 benchmark-results/
 
-# A dataset you label yourself lands in data/ next to the shipped one, so ignore that
-# shape and name the shipped corpus as the exception. Without this a labelling run leaves
+# A dataset you label yourself lands in data/ next to the shipped ones, so ignore that
+# shape and name the shipped corpora as the exceptions. Without this a labelling run leaves
 # its output sitting in `git status` looking like something you forgot to commit.
+#
+# Two are shipped: the same 841 screenshots labelled independently by two models, which is
+# what makes the cross-score in the README reproducible.
 data/*.jsonl
 !data/dataset-v1.jsonl
+!data/dataset-v1-gpt-5.6.jsonl
 data/*-stats.json
+!data/dataset-v1-gpt-5.6-stats.json
 data/checkpoints/
 
 # data/images/ is deliberately NOT ignored — the 841 screenshots are committed, so a
