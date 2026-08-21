@@ -27,22 +27,15 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 ## Results
 
 Every element scored under all three phrasings, against ground truth this repository ships —
-**30,921 requests** for the three rows scored on the Opus labels, 31,941 for the row scored on the
-GPT-5.6 ones.
+**30,921 requests** for the three rows scored on the Opus labels, **31,941** for the row scored on
+the GPT-5.6 ones. Every run is complete: no errors, no timeouts.
 
 | | centroid | IoU ≥ 0.5 | median IoU | returned a box | input tok/element | asked for |
 |---|---|---|---|----------------|---|---|
 | **GPT-5.6** | **95.62%** | **80.21%** | **0.725** | **100%** | 3,063 | pixels |
-| **Claude Opus 4.8** <sup>\*</sup> | 91.99% | 61.56% | 0.616 | **100%** | 3,659 | pixels |
+| **Claude Opus 4.8** | 91.97% | 62.35% | 0.624 | **100%** | 3,659 | pixels |
 | **Qwen2.5-VL-7B-Instruct** | 85.19% | 49.19% | 0.493 | **100%**       | 3,551 | floats |
 | GUI-Owl-1.5-8B-Instruct | 87.80% | 2.93% | 0.257 | **15.1%**      | 2,747 | floats |
-
-> <sup>\*</sup> **Opus's row covers 14,548 of its 31,941 requests — 46%.** The run did not
-> finish, and what it did cover is a *contiguous* stretch of the dataset rather than an even
-> sample, so read it as an estimate rather than a final figure. The evenly-spread 200-element
-> pilot agrees closely — 90.33% centroid, 61.67% IoU — which is what gives confidence in the
-> direction, not in the third decimal. Finishing it is a `--dataset data/dataset-v1-gpt-5.6.jsonl`
-> run away, and the checkpoint means it resumes rather than starting over.
 
 The two open-weight models are **Q4_K_M GGUF served by Ollama on an Apple Silicon Mac mini**, so
 read their numbers as a quantised laptop deployment rather than as the models' ceiling. GPT-5.6
@@ -52,9 +45,9 @@ and `data/dataset-v1-gpt-5.6.jsonl` (GPT-5.6), the same 841 screenshots labelled
 cross-score reproduces from a clone. That is the strongest arrangement available here, but the
 ceiling is still agreement with a strong labeller rather than with a human.
 
-**What the top two rows say together.** Centroid is close — 95.62% against 91.99% — so both find
+**What the top two rows say together.** Centroid is close — 95.62% against 91.97% — so both find
 the right element most of the time. The gap is in *box quality*: 80.21% of GPT-5.6's predictions
-reach IoU ≥ 0.5 against 61.56% of Opus's. If you need a tap point, the two are near equivalent; if
+reach IoU ≥ 0.5 against 62.35% of Opus's. If you need a tap point, the two are near equivalent; if
 you need an accurate bounding box, GPT-5.6 is ahead.
 
 **Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for
@@ -77,11 +70,11 @@ iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
 Every model was also asked the same element three ways, which turns out to matter more than the
 gap between them:
 
-| Phrasing | example | GPT-5.6 | Opus 4.8 <sup>\*</sup> | Qwen2.5-VL | GUI-Owl |
+| Phrasing | example | GPT-5.6 | Opus 4.8 | Qwen2.5-VL | GUI-Owl |
 |---|---|---|---|---|---|
-| `name` — short common name | *the scan QR code button* | 95.72% | 91.45% | 84.40% | 85.79% |
-| `label` — structural | *the blue button with the text scan QR code* | **96.13%** | **93.09%** | **88.11%** | **90.34%** |
-| `intent` — functional | *the button that lets the user scan their sign-in QR code* | 95.00% | 91.42% | 83.06% | 87.28% |
+| `name` — short common name | *the scan QR code button* | 95.72% | 91.43% | 84.40% | 85.79% |
+| `label` — structural | *the blue button with the text scan QR code* | **96.13%** | **93.03%** | **88.11%** | **90.34%** |
+| `intent` — functional | *the button that lets the user scan their sign-in QR code* | 95.00% | 91.43% | 83.06% | 87.28% |
 
 All four find `label` easiest — it is the phrasing that repeats the element's visible text most
 often. Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name`
@@ -92,9 +85,15 @@ and `intent` deliberately carries no text handle at all. Scoring all three is wh
 describe the ways a tester might actually phrase a locator rather than the easiest one.
 
 **And the average still flatters it.** Averaging the three counts an element as 2-of-3 correct;
-what a test suite needs is the element working *whatever* the tester typed. Of the 10,307 elements,
-**92.48% pass under all three phrasings** for GPT-5.6 against its 95.62% average — so the figure to
-plan reliability against is about three points below the headline, not equal to it.
+what a test suite needs is the element working *whatever* the tester typed. Measured per element:
+
+| | average centroid | passes under **all three** |
+|---|---|---|
+| GPT-5.6 | 95.62% | **92.48%** |
+| Claude Opus 4.8 | 91.97% | **87.10%** |
+
+So the figure to plan reliability against is three to five points below the headline, not equal to
+it — and the gap widens for the weaker model, which is the opposite of what an average suggests.
 
 Full summaries for all four runs — token totals and every field described below — are in
 [`reference-results/`](reference-results/). Latency is recorded but describes a laptop for the
@@ -191,7 +190,7 @@ python benchmark/run_vision_benchmark.py --api-flavor openai \
 # Anthropic — a different path (/v1/messages), payload and response shape
 python benchmark/run_vision_benchmark.py --api-flavor anthropic \
     --base-url https://api.anthropic.com --api-key "$ANTHROPIC_API_KEY" \
-    --model claude-opus-4-5 --limit 200
+    --model claude-opus-4-8 --limit 200
 ```
 
 > **Pilot first.** A full run is 30,921 requests and the screenshot is essentially the whole input

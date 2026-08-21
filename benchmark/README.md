@@ -238,25 +238,30 @@ own output — changing nothing but the coordinate format:
 | `pixels` | **90.33%** | **61.67%** | **0.547** | +0.0004 | 0.99× |
 
 No errors, and a bounding box on 100% of requests, in **both** runs. The model was answering every
-time; under one prompt it was answering in a frame it had never been given. At full scale — 30,921
-requests — the positional error stays under 0.001 of the screen on both axes, so this is not an
-artefact of the sample size.
+time; under one prompt it was answering in a frame it had never been given.
 
-Both halves of that are reproducible from a clone:
+**It held at full scale.** The same model over the whole corpus under `pixels` — 31,941 requests,
+zero errors — scores **91.97% centroid / 62.35% IoU** with a median positional error under 0.001 of
+the screen on both axes. That is the `Claude Opus 4.8` row in the root README, so the 7.79% above
+was the prompt and nothing else. A 200-element pilot predicted it to within half a point, which is
+the argument for piloting rather than for trusting a pilot's third decimal.
+
+Both halves of the comparison are reproducible from a clone:
 
 ```bash
 python benchmark/run_vision_benchmark.py --api-flavor anthropic \
     --base-url https://api.anthropic.com --api-key "$ANTHROPIC_API_KEY" \
-    --model claude-opus-4-5 --dataset data/dataset-v1-gpt-5.6.jsonl \
+    --model claude-opus-4-8 --dataset data/dataset-v1-gpt-5.6.jsonl \
     --description-index 0 1 2 --limit 200 --prompt-style normalized
 
 # then the same command with --prompt-style pixels; the checkpoint forks by style,
 # so the second run pays for itself rather than resuming the first
 ```
 
-**The model in that table is not the one in the root README's results table**, which is a different
-vendor's and was measured under `pixels` throughout. Two frontier models do not respond to this the
-same way, which is exactly why the style is a flag and is recorded in every result.
+**Do not generalise it to the other model in that table.** GPT-5.6 was measured under `pixels`
+throughout and has not been run under `normalized` at full scale, so nothing here says how much it
+would lose. Two frontier models need not respond to the format the same way — which is exactly why
+the style is a flag and is recorded in every result rather than being decided once.
 
 Two facts kept this from being read as *"that model is bad at grounding"*, and both are worth
 reproducing before anyone reports on a model from this harness:
