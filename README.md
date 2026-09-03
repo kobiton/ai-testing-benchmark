@@ -42,8 +42,10 @@ read their numbers as a quantised laptop deployment rather than as the models' c
 and Opus are **cross-labelled**: each is scored against labels the *other* one wrote, so neither is
 graded on its own output. **Both corpora are in this repository** — `data/dataset-v1.jsonl` (Opus)
 and `data/dataset-v1-gpt-5.6.jsonl` (GPT-5.6), the same 841 screenshots labelled twice — so the
-cross-score reproduces from a clone. That is the strongest arrangement available here, but the
-ceiling is still agreement with a strong labeller rather than with a human.
+cross-score reproduces from a clone. The ceiling of that arrangement is agreement with a strong
+labeller rather than with a human — and that ceiling has since been measured: a human annotator
+adjudicated the two labellings element by element, the result ships as
+`data/dataset-v1-human.jsonl`, and [the labels hold up](#how-good-are-the-model-labels-judged-by-the-human).
 
 **What the top two rows say together.** Centroid is close — 95.62% against 91.97% — so both find
 the right element most of the time. The gap is in *box quality*: 80.21% of GPT-5.6's predictions
@@ -215,21 +217,31 @@ One row per element, coordinates normalised to [0, 1]:
                   "the button that will allow the user to login to the system"]}
 ```
 
-**The same 841 screenshots are labelled twice, independently, by two different models.** Same
-schema, same `screenshot_id`s, same images — so either file works as `--dataset`, and scoring one
-model against the *other* model's labels is what the cross-score in the results above is.
+**The same 841 screenshots are labelled three times: twice, independently, by two different
+models — and once by a human who adjudicated between them.** Same schema, same `screenshot_id`s,
+same images — so any file works as `--dataset`, and scoring one model against the *other* model's
+labels is what the cross-score in the results above is.
 
-| | `dataset-v1.jsonl` | `dataset-v1-gpt-5.6.jsonl` |
-|---|---|---|
-| Labelled by | Claude Opus 4.8 | GPT-5.6 |
-| Elements | 10,314 | 10,647 |
-| With a bounding box | 10,307 (99.93%) | 10,647 (100%) |
-| Screenshots covered | 841 | 839 |
-| Descriptions | 3 per element (`name` / `label` / `intent`) | same |
+| | `dataset-v1.jsonl` | `dataset-v1-gpt-5.6.jsonl` | `dataset-v1-human.jsonl` |
+|---|---|---|---|
+| Labelled by | Claude Opus 4.8 | GPT-5.6 | a human annotator |
+| Elements | 10,314 | 10,647 | 11,914 |
+| With a bounding box | 10,307 (99.93%) | 10,647 (100%) | 11,914 (100%) |
+| Screenshots covered | 841 | 839 | 841 |
+| Descriptions | 3 per element (`name` / `label` / `intent`) | same | same |
 
-The two disagree about *what an element is*, not only about where its box goes: Opus found 10,314
-and GPT-5.6 10,647 on the same screens, and there is **no shared element id to join on**. Treat
-them as two opinions, not as one dataset in two files.
+The two model labellings disagree about *what an element is*, not only about where its box goes:
+Opus found 10,314 and GPT-5.6 10,647 on the same screens, and there is **no shared element id to
+join on**. Treat them as two opinions, not as one dataset in two files.
+
+The human file resolves that: the two labellings were paired element-by-element by box overlap
+(~12,000 physical elements), every frame was put in front of a hired annotator on CVAT with both
+model boxes preloaded, and the box they settled on — confirmed, adjusted, or redrawn — is the row.
+Its element ids carry a `gpt-`/`opus-` prefix naming which labelling the element came from, and
+92 records the annotator flagged (55 *element not found*, 37 *description ambiguous*) are excluded.
+One asymmetry to know: where the two models had matched the same element, the frame showed GPT's
+phrasings, so on nested same-element-different-granularity pairs (the icon vs the row around it)
+the human was adjudicating GPT's description of it.
 
 Screenshots are 841 Android, 1080×2400 throughout, crawled from **public app-store packages**.
 Every element was found, boxed and described by a frontier model, then spot-checked before the
@@ -237,13 +249,36 @@ dataset was accepted.
 
 **Ground truth from a model is a stated limitation, not a hidden one.** It buys ~10,000 elements
 instead of the few hundred hand-labelling would have produced, and the box convention is at least
-*consistent*, which is what makes the centroid/IoU split above legible. It also means the ceiling
-is agreement with a strong labeller, not with a human — and the second labelling is there so you
-can see how far two strong labellers agree with each other.
+*consistent*, which is what makes the centroid/IoU split above legible. The human labelling is
+what turns that limitation from assumed into measured:
 
-Everything is in the repository: both `.jsonl` files, their stats sidecars, and all 841 PNGs under
-`data/images/`, named `<screenshot_id>.png`. A clone is ~315 MB and is everything the benchmark
-needs; no separate download step required.
+### How good are the model labels, judged by the human?
+
+Each model's original label box, scored against the human's box for the same element:
+
+| | elements | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU |
+|---|---|---|---|---|
+| GPT-5.6 labels | 10,568 | 96.4% | **89.7%** | 0.963 |
+| Claude Opus 4.8 labels | 10,239 | 94.3% | 72.3% | 0.683 |
+
+What the adjudication found, in one pass over every kind of disagreement:
+
+- **Hallucination is negligible.** Of the ~3,000 elements only one model found, ~99% are real —
+  the annotator marked *not found* on 0.9% of GPT-only and 0.7% of Opus-only elements. One
+  labeller missing an element is common; inventing one is rare.
+- **Where the two models agreed** (6,691 elements, box overlap ≥ 0.5 IoU), the human confirmed
+  the agreed position ~98% of the time, and only 9 agreed-on elements (0.13%) turned out not to
+  exist. "Two independent models agree" holds up well as ground truth — with a ~2% blind spot
+  that is now a measurement rather than an assumption.
+- **Where they placed the box in genuinely different places** (318 elements), the human sided
+  with GPT about 2:1 — 72% of GPT's boxes vs 32% of Opus's reach IoU ≥ 0.5 against the human's.
+- Caveat for the table above: matched-pair frames carried GPT's phrasing (see the dataset note),
+  which favours GPT's granularity choice on nested pairs. The conflict and one-model-only numbers
+  do not depend on that choice.
+
+Everything is in the repository: all three `.jsonl` files, their stats sidecars, and all 841 PNGs
+under `data/images/`, named `<screenshot_id>.png`. A clone is ~320 MB and is everything the
+benchmark needs; no separate download step required.
 
 ---
 
@@ -432,6 +467,7 @@ run_pipeline.py             pipeline entrypoint
 data/
   dataset-v1.jsonl          ground truth, labelled by Opus   ← committed
   dataset-v1-gpt-5.6.jsonl  the same screens, by GPT-5.6     ← committed
+  dataset-v1-human.jsonl    a human adjudicating the two     ← committed
   images/                   841 screenshots, <id>.png        ← committed
 reference-results/          our published summaries          ← committed
 ```

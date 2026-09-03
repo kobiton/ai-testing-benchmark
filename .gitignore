@@ -15,14 +15,17 @@ benchmark-results/
 # shape and name the shipped corpora as the exceptions. Without this a labelling run leaves
 # its output sitting in `git status` looking like something you forgot to commit.
 #
-# Two are shipped: the same 841 screenshots labelled independently by two models, which is
-# what makes the cross-score in the README reproducible.
+# Three are shipped: the same 841 screenshots labelled independently by two models —
+# which is what makes the cross-score in the README reproducible — plus a human
+# adjudication of where those two labellings differ.
 data/*.jsonl
 !data/dataset-v1.jsonl
 !data/dataset-v1-gpt-5.6.jsonl
+!data/dataset-v1-human.jsonl
 data/*-stats.json
 !data/dataset-v1-stats.json
 !data/dataset-v1-gpt-5.6-stats.json
+!data/dataset-v1-human-stats.json
 data/checkpoints/
 
 # data/images/ is deliberately NOT ignored — the 841 screenshots are committed, so a

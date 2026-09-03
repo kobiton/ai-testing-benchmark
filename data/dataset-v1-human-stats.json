@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-09-03T10:00:00+00:00",
+  "labelled_by": "human annotator (CVAT adjudication of the two model labellings)",
+  "total_screenshots": 841,
+  "total_elements": 11914,
+  "elements_with_bbox": 11914,
+  "elements_from_gpt_labelling": 10568,
+  "elements_from_opus_labelling": 1346,
+  "flagged_excluded": {"not_found": 55, "ambiguous": 37},
+  "avg_elements_per_screenshot": 14.17
+}
