@@ -21,6 +21,7 @@ data/*.jsonl
 !data/dataset-v1.jsonl
 !data/dataset-v1-gpt-5.6.jsonl
 data/*-stats.json
+!data/dataset-v1-stats.json
 !data/dataset-v1-gpt-5.6-stats.json
 data/checkpoints/
 

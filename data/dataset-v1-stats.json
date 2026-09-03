@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-07-29T17:18:43.520553+00:00",
+  "llm_provider": "claude",
+  "model": "claude-opus-4-8",
+  "total_screenshots": 841,
+  "screenshots_with_elements": 841,
+  "screenshots_with_no_elements": 0,
+  "total_elements": 10314,
+  "elements_with_bbox": 10307,
+  "elements_with_descriptions": 10314,
+  "elements_with_two_descriptions": 10314,
+  "avg_elements_per_screenshot": 12.26
+}
