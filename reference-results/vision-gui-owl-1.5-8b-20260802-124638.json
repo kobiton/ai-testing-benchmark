@@ -94,6 +94,15 @@
         "error_count": 1
       }
     },
+    "agreement": {
+      "phrasings": 3,
+      "scored_elements": 10307,
+      "any_pass_count": 9834,
+      "any_accuracy": 0.9541,
+      "all_pass_count": 8000,
+      "all_accuracy": 0.7762,
+      "mixed_count": 1834
+    },
     "total_input_tokens": 84938521,
     "total_output_tokens": 396549,
     "avg_input_tokens": 2747.0,
