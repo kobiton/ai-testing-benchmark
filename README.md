@@ -33,7 +33,7 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 |----------------------------|---------|------------------------------|-------------------------|-------------|---------------|----------|
 | **GPT-5.6**                | 10,568  | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
 | **Claude Opus 4.8**        | 10,239  | 94.3%                        | 72.3%                   | 0.683       | 100%          | pixels   |
-| **Qwen2.5-VL-7B-Instruct** | 11,914  | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | pixels   |
+| **Qwen2.5-VL-7B-Instruct** | 11,914  | 83.5%                        | 55.1%                   | 0.552       | 99.98%        | pixels   |
 | GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩   | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
 
 The GPT-5.6 and Opus rows score the *label* boxes those two models drew as this corpus's authors — and the human ground truth was made by adjudicating between those very boxes — so read
@@ -51,7 +51,7 @@ What the human adjudication itself found, in one pass over every kind of disagre
 - Caveat: matched-pair frames carried GPT's phrasing (see the dataset note), which favours GPT's granularity choice on nested pairs. The conflict and one-model-only numbers do not depend on that choice.
 
 **[Browse every row screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/compare)**
-— the ground-truth boxes and the model's side by side over each screenshot, every prediction tagged with its IoU and colour-coded by band, and a per-element list with the IoU and centroid verdicts.
+the ground-truth boxes and the model's side by side over each screenshot, every prediction tagged with its IoU and colour-coded by band, and a per-element list with the IoU and centroid verdicts.
 
 ### The three-phrasing study, cross-labelled
 
@@ -250,16 +250,12 @@ Two metrics, both always computed. `--metric` only picks which one is the headli
 | **centroid** | the centre of the predicted box falls inside the ground-truth box | default |
 | IoU          | IoU(pred, gt) ≥ 0.5                                               |         |
 
-**Centroid is the default, and the reason is not that it is easier.** It is the question an
-automated tap actually asks — would the tap land on the control? IoU asks something stricter: that
-the model also draw the same kind of box we do. Models tend to box the glyph, while our ground
-truth boxes the full control including its padding, so an element that was located correctly can
-still fail IoU. Centroid separates the two questions; IoU is carried as a secondary box-tightness
-figure, with the bias stated rather than corrected.
+**Centroid is the default, and the reason is not that it is easier.** It is the question an automated tap actually asks: would the tap land on the control? 
+IoU asks something stricter: that the model also draw the same kind of box we do. Models tend to box the glyph, while our ground truth boxes the full control including its padding, 
+so an element that was located correctly can still fail IoU. 
+Centroid separates the two questions; IoU is carried as a secondary box-tightness figure, with the bias stated rather than corrected.
 
-**The benchmark prompt deliberately states no box convention at all.** Loading the labeller's
-rules into it would coach models toward the labeller's answer and measure agreement with our
-annotator rather than element localisation.
+**The benchmark prompt deliberately states no box convention at all.** Loading the labeller's rules into it would coach models toward the labeller's answer and measure agreement with our annotator rather than element localisation.
 
 ### Pixels, or a 0–1000 grid?
 
@@ -376,12 +372,12 @@ cp .env.example .env          # set LLM_PROVIDER and the matching API key
 python run_pipeline.py --input path/to/screenshots --output-name my-dataset
 ```
 
-| Step | Calls | |
-|---|---|---|
-| 1 · extract elements | 1 per screenshot | identify every interactive element |
-| 2 · detect boxes | **1 per element** | dominates the cost |
-| 3 · write descriptions | 1 per screenshot | three phrasings each |
-| 4 · assemble | 0 | merge into one JSONL, write a stats sidecar |
+| Step                 | Calls             |                                            |
+|----------------------|-------------------|--------------------------------------------|
+| 1 · extract elements | 1 per screenshot  | identify every interactive element         |
+| 2 · detect boxes     | **1 per element** | dominates the cost                         |
+| 3 · write descriptions | 1 per screenshot  | three phrasings each                       |
+| 4 · assemble         | 0                 | merge into one JSONL, write a stats sidecar |
 
 Everything it produces stays on your machine, under `data/`:
 
@@ -441,8 +437,7 @@ benchmark-results/          one JSON per benchmark run
 benchmark-results/checkpoints/   scored (element, phrasing) pairs, so a run resumes
 ```
 
-Nothing is uploaded anywhere and nothing is read from a network location: the corpus is in the
-clone, and the only address the tools contact is the model endpoint you give them.
+Nothing is uploaded anywhere and nothing is read from a network location: the corpus is in the clone, and the only address the tools contact is the model endpoint you give them.
 
 ---
 
@@ -463,7 +458,4 @@ clone, and the only address the tools contact is the model endpoint you give the
 
 Code is [Apache-2.0](LICENSE).
 
-The annotations in `data/` are released for research and evaluation use. The screenshots depict
-third-party applications published on public app stores; their interfaces remain the property of
-their respective owners, and they are provided for benchmarking vision models rather than for
-redistribution as artwork.
+The annotations in `data/` are released for research and evaluation use. The screenshots depict third-party applications published on public app stores; their interfaces remain the property of their respective owners, and they are provided for benchmarking vision models rather than for redistribution as artwork.
