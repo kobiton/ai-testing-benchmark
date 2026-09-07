@@ -17,6 +17,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 
@@ -121,7 +122,7 @@ def load_gt_override(path: str) -> dict:
     return index
 
 
-def _resolve_gt(row: dict, index: dict, prefix: str = "") -> tuple[dict | None, str]:
+def _resolve_gt(row: dict, index: dict, prefix: str = "") -> tuple[Optional[dict], str]:
     """The override row for a result row, and how it was found.
 
     With `prefix` the join is exact and nothing else: a bare `e8` is looked up as
@@ -175,7 +176,7 @@ def _grade(r: dict, pred_bbox, pred_point, gt: dict) -> None:
 
 
 def rescore_result(prior: dict, images_dir: str, coord_grid: int,
-                   metric: str = "", gt_override: dict | None = None,
+                   metric: str = "", gt_override: Optional[dict] = None,
                    gt_override_path: str = "", gt_prefix: str = "") -> dict:
     """Re-score a finished result file from each row's `raw`, calling no model at all.
 
