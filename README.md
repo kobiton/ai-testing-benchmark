@@ -41,7 +41,12 @@ quality, not a benchmark answer. The other three rows are benchmark answers: scr
 GPT-5.6's descriptions, all three phrasings each; the name phrasing is shown. Averaged over the three it scores 91.97% centroid, and 87.07% of elements pass under all three
 (summary in `reference-results/`).
 
-*Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩ — not the quantised laptop builds of the study below.
+*Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩.
+
+**Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for floats in [0, 1], and that is not a free choice — see [How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score), 
+where the same Opus model scores 7.79% or 90.33% on one 200-element set depending on nothing but that. 
+Qwen ignores the instruction and answers in pixels regardless, so its figure is unaffected; 
+GUI-Owl answers on a 0–1000 grid and has never been measured under the pixel prompt.
 
 What the human adjudication itself found, in one pass over every kind of disagreement:
 
@@ -55,30 +60,13 @@ What the human adjudication itself found, in one pass over every kind of disagre
 **[Browse every row screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/compare)**
 the ground-truth boxes and the model's side by side over each screenshot, every prediction tagged with its IoU and colour-coded by band, and a per-element list with the IoU and centroid verdicts.
 
-### The three-phrasing study, cross-labelled
+### How much the wording matters
 
-Before the human labelling existed, the strongest available arrangement was scoring each frontier model against labels the *other* one wrote — and it is still the deeper study: every element asked three ways, 
-**30,921 requests** for the three rows scored on the Opus labels, **31,941** for the row scored on the GPT-5.6 ones. Every run is complete: no errors, no timeouts.
-
-|                            | centroid    | IoU ≥ 0.5  | median IoU | returned a box | input tok/element | asked for |
-|----------------------------|-------------|------------|-----------|---------------|-------------------|-----------|
-| **GPT-5.6**                | **95.62%**  | **80.21%** | **0.725** | **100%**      | 3,063             | pixels    |
-| **Claude Opus 4.8**        | 91.97%      | 62.35%     | 0.624     | **100%**      | 3,659             | pixels    |
-| **Qwen2.5-VL-7B-Instruct** | 85.19%      | 49.19%     | 0.493     | **100%**      | 3,551             | floats    |
-| GUI-Owl-1.5-8B-Instruct    | 87.80%      | 2.93%      | 0.257     | **15.1%**     | 2,747             | floats    |
-
-The two open-weight models are **Q4_K_M GGUF served by Ollama on an Apple Silicon Mac mini**, so read their numbers as a quantised laptop deployment rather than as the models' ceiling. GPT-5.6
-and Opus are **cross-labelled**: each is scored against labels the *other* one wrote, so neither is graded on its own output. **Both corpora are in this repository** — `data/dataset-v1.jsonl` (Opus)
-and `data/dataset-v1-gpt-5.6.jsonl` (GPT-5.6), the same 841 screenshots labelled twice — so the cross-score reproduces from a clone. The ceiling of that arrangement is agreement with a strong
-labeller rather than with a human — the ceiling the headline table above has since measured.
-
-**What the top two rows say together.** Centroid is close — 95.62% against 91.97% — so both find the right element most of the time. The gap is in *box quality*: 80.21% of GPT-5.6's predictions
-reach IoU ≥ 0.5 against 62.35% of Opus's. If you need a tap point, the two are near equivalent; if you need an accurate bounding box, GPT-5.6 is ahead.
-
-**Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for floats in [0, 1], and that is not a free choice — see [How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score), 
-where the same Opus model scores 7.79% or 90.33% on one 200-element set depending on nothing but that. 
-Qwen ignores the instruction and answers in pixels regardless, so its figure is unaffected; 
-GUI-Owl answers on a 0–1000 grid and has never been measured under the pixel prompt.
+Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. The headline table shows `name`; this section is what the other two
+add. Opus's figures here are on the human ground truth (the same 10,568 elements as above). The GPT-5.6, Qwen and GUI-Owl figures come from the earlier cross-labelled runs —
+each frontier model scored against the *other* one's labels (`data/dataset-v1.jsonl` by Opus, `data/dataset-v1-gpt-5.6.jsonl` by GPT-5.6), the two open-weight models as
+Q4_K_M GGUF on an Apple Silicon Mac mini against the Opus labels — and will move to the human ground truth as those runs are repeated on it. The finding does not depend on which
+answer key is used: it is about how much a model's score moves when only the wording changes.
 
 **Note:** GUI-Owl's centroid sitting above Qwen's is not a better score — it is an answer to a different question. It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. 
 A point has no area, so it scores zero on IoU by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on the same leaderboard:
@@ -87,13 +75,13 @@ iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
      2.93%    =     15.1%     ×        19.4%
 ```
 
-Every model was also asked the same element three ways, which turns out to matter more than the gap between them:
+Asked the same element three ways, every model moves more than the gap between models:
 
 | Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8  | Qwen2.5-VL | GUI-Owl    |
 |----------------------------|------------------------------------------------------------|------------|-----------|------------|------------|
-| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.43%    | 84.40%     | 85.79%     |
-| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.03%** | **88.11%** | **90.34%** |
-| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.43%    | 83.06%     | 87.28%     |
+| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 84.40%     | 85.79%     |
+| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **88.11%** | **90.34%** |
+| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 83.06%     | 87.28%     |
 
 All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name` hardest.
 
@@ -104,13 +92,13 @@ A single-phrasing headline flatters a model, because `name` is usually the eleme
 |                          | average centroid | passes under **all three** |
 |--------------------------|-----------------|---------------------------|
 | GPT-5.6                  | 95.62%          | **92.48%**                |
-| Claude Opus 4.8          | 91.97%          | **87.10%**                |
+| Claude Opus 4.8          | 91.97%          | **87.07%**                |
 | Qwen2.5-VL-7B-Instruct   | 85.19%          | **73.85%**                |
 | GUI-Owl-1.5-8B-Instruct  | 87.80%          | **77.62%**                |
 
 So the figure to plan reliability against is three points below the headline for the strongest model here and ten to eleven for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. (`summary.agreement` in every multi-phrasing result file carries these counts.)
 
-Full summaries for all four runs — token totals and every field described below — are in [`reference-results/`](reference-results/). Latency is recorded per run, but each row's figure describes its own serving setup above — it is not comparable across rows, and not a production figure for any of them.
+Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
 
 ---
 
