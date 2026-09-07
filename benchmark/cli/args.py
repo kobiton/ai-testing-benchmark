@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "For scoring a finished run on a ground truth that did not "
                              "exist when it ran — the human one — without a new API call. "
                              "The two files must share a description bank; mismatches are "
-                             "counted and warned about. Output is named -GT-<stem>-RESCORED-.")
+                             "counted and warned about. Output is named -GT-<stem>-<run time>, no -RESCORED-.")
     parser.add_argument("--rescore-gt-prefix", default="", metavar="SRC",
                         help="With --rescore-gt: the id prefix the override dataset gives "
                              "the elements this run answered, e.g. `gpt` when the run "

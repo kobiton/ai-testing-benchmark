@@ -365,9 +365,12 @@ def rescored_filename(original: str, gt_stem: str = "") -> str:
     """`vision-x-20260802-124638.json` -> `vision-x-RESCORED-20260802-124638.json`.
 
     With `gt_stem`, the `-GT-<name>` segment names the ground truth the file was graded
-    on, replacing the original's if it had one — `…-GT-aya-openai-gpt-5.6-terra-…`
-    becomes `…-GT-v1-human-RESCORED-…`. Same stem rule as a live run: the dataset's
-    filename without `dataset-` and `.jsonl`.
+    on, replacing the original's if it had one, and **no `-RESCORED-` is added**:
+    `…-GT-aya-openai-gpt-5.6-terra-20260819-…` becomes `…-GT-v1-human-20260819-…`. The
+    infix exists to keep a re-read from taking its input's name, and a different ground
+    truth already does that; what the name must still say is the run time, which stays.
+    Provenance lives in the file (`rescored_at`, `rescored_gt_from`). Same stem rule as a
+    live run: the dataset's filename without `dataset-` and `.jsonl`.
 
     The infix goes *before* the timestamp, like `-PARTIAL-` and `-SERVED-`, so the run
     time stays the last thing in the name. That is not cosmetic: anything reading a run's
@@ -377,6 +380,19 @@ def rescored_filename(original: str, gt_stem: str = "") -> str:
     which is where you want it while deciding which number to quote.
     """
     stem = Path(original).stem
+    if gt_stem:
+        seg = f"-GT-{gt_stem}"
+        stem = stem.replace(RESCORE_INFIX, "")
+        if _GT_SEGMENT_RE.search(stem):
+            stem = _GT_SEGMENT_RE.sub(seg, stem, count=1)
+        else:
+            matches = list(_TRAILING_TS_RE.finditer(stem))
+            if matches:
+                last = matches[-1]
+                stem = f"{stem[:last.start()]}{seg}{stem[last.start():]}"
+            else:
+                stem = f"{stem}{seg}"
+        return f"{stem}.json"
     if RESCORE_INFIX not in stem:
         matches = list(_TRAILING_TS_RE.finditer(stem))
         if not matches:
@@ -384,10 +400,4 @@ def rescored_filename(original: str, gt_stem: str = "") -> str:
         else:
             last = matches[-1]
             stem = f"{stem[:last.start()]}{RESCORE_INFIX}{stem[last.start():]}"
-    if gt_stem:
-        seg = f"-GT-{gt_stem}"
-        if _GT_SEGMENT_RE.search(stem):
-            stem = _GT_SEGMENT_RE.sub(seg, stem, count=1)
-        else:
-            stem = stem.replace(RESCORE_INFIX, f"{seg}{RESCORE_INFIX}", 1)
     return f"{stem}.json"
