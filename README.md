@@ -32,12 +32,14 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 |                            | elements | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
 |----------------------------|---------|------------------------------|-------------------------|-------------|---------------|----------|
 | **GPT-5.6**                | 10,568  | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
-| **Claude Opus 4.8**        | 10,239  | 94.3%                        | 72.3%                   | 0.683       | 100%          | pixels   |
+| **Claude Opus 4.8**        | 10,568  | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
 | **Qwen2.5-VL-7B-Instruct** | 11,914  | 83.5%                        | 55.1%                   | 0.552       | 99.98%        | pixels   |
 | GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩   | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
 
-The GPT-5.6 and Opus rows score the *label* boxes those two models drew as this corpus's authors — and the human ground truth was made by adjudicating between those very boxes — so read
-them as label quality, not benchmark answers. The Qwen and GUI-Owl rows are benchmark answers: screenshot + one name-phrasing description in, box out.
+The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by adjudicating between those very boxes — so read it as label
+quality, not a benchmark answer. The other three rows are benchmark answers: screenshot + one name-phrasing description in, box out. Opus was asked the 10,568 elements that carry
+GPT-5.6's descriptions, all three phrasings each; the name phrasing is shown. Averaged over the three it scores 91.97% centroid, and 87.07% of elements pass under all three
+(summary in `reference-results/`).
 
 *Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩ — not the quantised laptop builds of the study below.
 
@@ -358,6 +360,12 @@ Three things the runner does that are worth knowing before a long run:
   tokens for a re-run. Cost is not the main argument — the model is not deterministic, so a re-run
   answers afresh and nobody can then tell a harness fix from a model that replied differently.
   Re-scoring the same `raw` proves which one moved.
+- **`--rescore-gt` grades old answers on a ground truth that did not exist when they were made.**
+  Same path, answer key swapped: each row's `gt_bbox` is replaced by the given dataset's box for the
+  same (screenshot, element), joined with `--rescore-gt-prefix` naming the id prefix that dataset
+  gives this run's elements (`gpt` when the run answered `data/dataset-v1-gpt-5.6.jsonl` and the
+  human file calls those `gpt-eN`). Rows the new ground truth lacks are dropped, never graded against
+  the old box, and each row's description is checked against the dataset's text at the same index.
 
 ---
 

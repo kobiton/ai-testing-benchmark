@@ -149,6 +149,22 @@ def build_parser() -> argparse.ArgumentParser:
                              "carried over untouched; only the coordinates and the pass/fail "
                              "drawn from them are recomputed. Writes a new -RESCORED- file "
                              "and never overwrites the input.")
+    parser.add_argument("--rescore-gt", default="", metavar="DATASET.jsonl",
+                        help="With --rescore: grade the file's existing answers against "
+                             "this dataset's boxes instead of its own, joining on "
+                             "(screenshot_id, element_id) with a `gpt-`/`opus-` id prefix "
+                             "tolerated. Rows whose element the dataset lacks are dropped. "
+                             "For scoring a finished run on a ground truth that did not "
+                             "exist when it ran — the human one — without a new API call. "
+                             "The two files must share a description bank; mismatches are "
+                             "counted and warned about. Output is named -GT-<stem>-RESCORED-.")
+    parser.add_argument("--rescore-gt-prefix", default="", metavar="SRC",
+                        help="With --rescore-gt: the id prefix the override dataset gives "
+                             "the elements this run answered, e.g. `gpt` when the run "
+                             "answered GPT's descriptions and the override names them "
+                             "`gpt-eN`. Makes the join exact — a bare `e8` is only ever "
+                             "`gpt-e8`, never the `opus-e8` on the same screen — and is "
+                             "the right mode whenever the override mixes sources.")
     parser.add_argument("--api-flavor", choices=list(API_FLAVORS), default="proxy",
                         help="Which dialect the endpoint speaks. 'proxy' (default) is the "
                              "OpenAI request shape sent with both auth headers — vLLM, "

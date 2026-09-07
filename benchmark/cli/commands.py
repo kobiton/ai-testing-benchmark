@@ -18,7 +18,7 @@ import httpx
 from dotenv import load_dotenv
 
 from benchmark.artifacts.builder import finalize_from_checkpoint
-from benchmark.artifacts.rescoring import rescore_result, rescored_filename
+from benchmark.artifacts.rescoring import load_gt_override, rescore_result, rescored_filename
 from benchmark.cli.args import build_parser
 from benchmark.engine.runner import _install_stop_handlers, run_benchmark
 from benchmark.model.client import _list_loaded_models
@@ -52,6 +52,12 @@ def main():
     # Handled before anything else because it needs none of what follows: no dataset (the
     # ground truth is already on every row), no images unless a row is missing its
     # dimensions, and no endpoint at all.
+    if args.rescore_gt and not args.rescore:
+        logger.error("--rescore-gt only applies together with --rescore")
+        sys.exit(1)
+    if args.rescore_gt_prefix and not args.rescore_gt:
+        logger.error("--rescore-gt-prefix only applies together with --rescore-gt")
+        sys.exit(1)
     if args.rescore:
         src = Path(args.rescore)
         if not src.exists():
@@ -61,23 +67,29 @@ def main():
             sys.exit(1)
         with open(src) as f:
             prior = json.load(f)
-        grid = _coord_grid_for(prior.get("model", ""), prior.get("served_model", ""),
-                               args.coord_grid)
-        logger.info("Re-scoring %s — model=%s, coordinate grid %s -> %s",
-                    src.name, prior.get("model", "?"),
-                    prior.get("coord_grid", 0) or "pixel", grid or "pixel")
+        grid = _coord_grid_for(prior.get("model", ""), prior.get("served_model", ""), args.coord_grid)
+        logger.info("Re-scoring %s — model=%s, coordinate grid %s -> %s",src.name, prior.get("model", "?"), prior.get("coord_grid", 0) or "pixel", grid or "pixel")
+        gt_override, gt_stem = None, ""
+        if args.rescore_gt:
+            gt_path = Path(args.rescore_gt)
+            if not gt_path.exists():
+                logger.error("Override dataset not found: %s", args.rescore_gt)
+                sys.exit(1)
+            gt_override = load_gt_override(str(gt_path))
+            gt_stem = gt_path.name.removesuffix(".jsonl")
+            gt_stem = gt_stem[len("dataset-"):] if gt_stem.startswith("dataset-") else gt_stem
+            logger.info("  ground truth replaced by %s (%d element(s))",gt_path.name, len({id(r) for v in gt_override.values() for r in v}))
         result = rescore_result(prior, str(Path(args.images_dir).resolve()), grid,
-                               metric=args.metric)
+                               metric=args.metric, gt_override=gt_override,
+                               gt_override_path=str(gt_path.resolve()) if gt_override is not None else "",
+                               gt_prefix=args.rescore_gt_prefix)
         output_dir.mkdir(parents=True, exist_ok=True)
-        out_path = output_dir / rescored_filename(src.name)
+        out_path = output_dir / rescored_filename(src.name, gt_stem)
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         s, ps = result["summary"], (prior.get("summary") or {})
         logger.info("Results written to %s", out_path)
-        logger.info("  centroid %.2f%% -> %.2f%%   IoU>=%.1f %.2f%% -> %.2f%%",
-                    (ps.get("centroid_accuracy") or 0) * 100,
-                    s["centroid_accuracy"] * 100, IOU_THRESHOLD,
-                    (ps.get("iou_accuracy") or 0) * 100, s["iou_accuracy"] * 100)
+        logger.info("  centroid %.2f%% -> %.2f%%   IoU>=%.1f %.2f%% -> %.2f%%",(ps.get("centroid_accuracy") or 0) * 100, s["centroid_accuracy"] * 100, IOU_THRESHOLD, (ps.get("iou_accuracy") or 0) * 100, s["iou_accuracy"] * 100)
         return
 
     dataset_path = Path(args.dataset).resolve()
