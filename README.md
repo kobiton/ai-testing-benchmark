@@ -18,15 +18,18 @@ and let a vision model locate the element on screen.
 
 This repository benchmarks exactly that.
 
-It contains **841 real Android screenshots and 10,307 ground-truth UI elements**, each described in three different ways. The runner works with any **OpenAI-compatible endpoint**, including vLLM, llama.cpp, Ollama, and hosted APIs.
+It contains **841 real Android screenshots and 10,307 ground-truth UI elements**, each described in three different ways. 
+The runner works with any **OpenAI-compatible endpoint**, including vLLM, llama.cpp, Ollama, and hosted APIs.
 
-It exists because we needed to choose a self-hosted model and wanted a benchmark tailored to the question we actually needed to answer. Published so you can check our numbers and score your own model on the same corpus.
+It exists because we needed to choose a self-hosted model and wanted a benchmark tailored to the question we actually needed to answer. 
+Published so you can check our numbers and score your own model on the same corpus.
 
 ---
 
 ## Results
 
-**Scored against the human-adjudicated ground truth** (see `data/dataset-v1-human.jsonl`), 11,914 elements: an independent human annotator settled every element the two frontier labellings disagreed on and verified the ones they agreed on 
+**Scored against the human-adjudicated ground truth** (see `data/dataset-v1-human.jsonl`), 11,914 elements: an independent 
+human annotator settled every element the two frontier labellings disagreed on and verified the ones they agreed on 
 (how it was built is under [The dataset](#the-dataset)).
 
 |                            | elements | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
@@ -36,39 +39,47 @@ It exists because we needed to choose a self-hosted model and wanted a benchmark
 | **Qwen2.5-VL-7B-Instruct** | 11,914  | 83.5%                        | 55.1%                   | 0.552       | 99.98%        | pixels   |
 | GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩   | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
 
-The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by adjudicating between those very boxes — so read it as label
-quality, not a benchmark answer. The other three rows are benchmark answers: screenshot + one name-phrasing description in, box out. Opus was asked the 10,568 elements that carry
-GPT-5.6's descriptions, all three phrasings each; the name phrasing is shown. Averaged over the three it scores 91.97% centroid, and 87.07% of elements pass under all three
-(summary in `reference-results/`). Qwen was likewise asked all three phrasings on the same endpoint: 84.87% averaged, 73.92% passing all three.
+The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by 
+adjudicating between those very boxes — so read it as label quality, not a benchmark answer. 
+The other three rows are benchmark answers: screenshot + one name-phrasing description in, box out. 
+Opus was asked the 10,568 elements that carry GPT-5.6's descriptions, all three phrasings each; the name phrasing is shown. 
+Averaged over the three it scores 91.97% centroid, and 87.07% of elements pass under all three (summary in `reference-results/`). 
+Qwen was likewise asked all three phrasings on the same endpoint: 84.87% averaged, 73.92% passing all three.
 
 *Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩.
 
-**Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for floats in [0, 1], and that is not a free choice — see [How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score), 
+**Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for floats in [0, 1], 
+and that is not a free choice — see [How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score), 
 where the same Opus model scores 7.79% or 90.33% on one 200-element set depending on nothing but that. 
 Qwen ignores the instruction and answers in pixels regardless, so its figure is unaffected; 
 GUI-Owl answers on a 0–1000 grid and has never been measured under the pixel prompt.
 
 What the human adjudication itself found, in one pass over every kind of disagreement:
 
-- **Hallucination is negligible.** Of the ~3,000 elements only one model found, ~99% are real — the annotator marked *not found* on 0.9% of GPT-only and 0.7% of Opus-only elements.
-  One labeller missing an element is common; inventing one is rare.
-- **Where the two labellings agreed** (6,691 elements, box overlap ≥ 0.5 IoU), the human confirmed the agreed position ~98% of the time, and only 9 agreed-on elements (0.13%) turned out not to exist. 
+- **Hallucination is negligible.** Of the ~3,000 elements only one model found, ~99% are real — the annotator marked *not found* 
+  on 0.9% of GPT-only and 0.7% of Opus-only elements. One labeller missing an element is common; inventing one is rare.
+- **Where the two labellings agreed** (6,691 elements, box overlap ≥ 0.5 IoU), the human confirmed the agreed position ~98% of the time, 
+  and only 9 agreed-on elements (0.13%) turned out not to exist. 
   "Two independent models agree" holds up well as ground truth — with a ~2% blind spot that is now a measurement rather than an assumption.
-- **Where they placed the box in genuinely different places** (318 elements), the human sided with GPT about 2:1 — 72% of GPT's boxes vs 32% of Opus's reach IoU ≥ 0.5 against the human's.
-- Caveat: matched-pair frames carried GPT's phrasing (see the dataset note), which favours GPT's granularity choice on nested pairs. The conflict and one-model-only numbers do not depend on that choice.
+- **Where they placed the box in genuinely different places** (318 elements), the human sided with GPT about 2:1 — 
+  72% of GPT's boxes vs 32% of Opus's reach IoU ≥ 0.5 against the human's.
+- Caveat: matched-pair frames carried GPT's phrasing (see the dataset note), which favours GPT's granularity choice on nested pairs. 
+  The conflict and one-model-only numbers do not depend on that choice.
 
 **[Browse every row screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/compare)**
 the ground-truth boxes and the model's side by side over each screenshot, every prediction tagged with its IoU and colour-coded by band, and a per-element list with the IoU and centroid verdicts.
 
 ### How much the wording matters
 
-Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. The headline table shows `name`; this section is what the other two
-add. The Opus and Qwen figures are on the human ground truth (Opus over its 10,568 elements, Qwen over all 11,914 on the production endpoint). The GPT-5.6 and GUI-Owl
-figures still come from the earlier cross-labelled runs — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), GUI-Owl as a Q4_K_M GGUF on an Apple Silicon Mac mini
-against the same labels — and will move to the human ground truth as those runs are repeated on it. The finding does not depend on which answer key is used: it is about how
-much a model's score moves when only the wording changes.
+Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
+The headline table shows `name`; this section is what the other two add. 
+The Opus and Qwen figures are on the human ground truth (Opus over its 10,568 elements, Qwen over all 11,914 on the production endpoint). 
+The GPT-5.6 and GUI-Owl figures still come from the earlier cross-labelled runs — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), GUI-Owl as a Q4_K_M GGUF on an Apple Silicon Mac mini
+against the same labels — and will move to the human ground truth as those runs are repeated on it. 
+The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
 
-**Note:** GUI-Owl's centroid sitting above Qwen's is not a better score — it is an answer to a different question. It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. 
+**Note:** GUI-Owl's centroid sitting above Qwen's is not a better score — it is an answer to a different question. 
+It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. 
 A point has no area, so it scores zero on IoU by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on the same leaderboard:
 ```
 iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
@@ -83,11 +94,17 @@ Asked the same element three ways, every model moves more than the gap between m
 | `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **89.52%** | **90.34%** |
 | `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 81.61%     | 87.28%     |
 
-All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name` hardest.
+All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. 
+Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name` hardest.
 
-A single-phrasing headline flatters a model, because `name` is usually the element's visible text and `intent` deliberately carries no text handle at all. Scoring all three is what makes the figure describe the ways a tester might actually phrase a locator rather than the easiest one.
+A single-phrasing headline flatters a model, because `name` is usually the element's visible text and `intent` deliberately 
+carries no text handle at all. 
+Scoring all three is what makes the figure describe the ways a tester might actually phrase a locator rather than the easiest one.
 
-**And the average still flatters it.** Averaging the three counts an element as 2-of-3 correct; what a test suite needs is the element working *whatever* the tester typed. Measured per element:
+**And the average still flatters it.** 
+Averaging the three counts an element as 2-of-3 correct; 
+what a test suite needs is the element working *whatever* the tester typed. 
+Measured per element:
 
 |                          | average centroid | passes under **all three** |
 |--------------------------|-----------------|---------------------------|
@@ -96,9 +113,12 @@ A single-phrasing headline flatters a model, because `name` is usually the eleme
 | Qwen2.5-VL-7B-Instruct   | 84.87%          | **73.92%**                |
 | GUI-Owl-1.5-8B-Instruct  | 87.80%          | **77.62%**                |
 
-So the figure to plan reliability against is three points below the headline for the strongest model here and ten to eleven for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. (`summary.agreement` in every multi-phrasing result file carries these counts.)
+So the figure to plan reliability against is three points below the headline for the strongest model here and
+ten to eleven for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
+(`summary.agreement` in every multi-phrasing result file carries these counts.)
 
-Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
+Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 
+Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
 
 ---
 
@@ -138,14 +158,17 @@ python benchmark/run_vision_benchmark.py \
     --description-index 0 1 2
 ```
 
-Output lands in `benchmark-results/vision-<model>-GT-<dataset>-<timestamp>.json`. Anything that makes a number mean something narrower — a `--limit` pilot, a stopped run, an endpoint that answered as a different model — is marked in the filename too;
-[`benchmark/README.md`](benchmark/README.md) lists them.
+Output lands in `benchmark-results/vision-<model>-GT-<dataset>-<timestamp>.json`. 
+Anything that makes a number mean something narrower — a `--limit` pilot, a stopped run, an endpoint that answered as a different model — 
+is marked in the filename too; [`benchmark/README.md`](benchmark/README.md) lists them.
 
 ---
 
 ## Endpoint recipes
 
-Any server exposing `POST /v1/chat/completions` with image content works out of the box. `--api-key` is then sent as **both** `Authorization: Bearer` and `X-API-Key` — servers disagree about which they read — and omitted entirely when empty.
+Any server exposing `POST /v1/chat/completions` with image content works out of the box. 
+`--api-key` is then sent as **both** `Authorization: Bearer` and `X-API-Key` — 
+servers disagree about which they read — and omitted entirely when empty.
 
 **vLLM**
 
@@ -168,7 +191,8 @@ llama-server -m Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf --mmproj mmproj.gguf --ctx-si
 python benchmark/run_vision_benchmark.py --base-url http://localhost:8080 --model qwen2.5-vl
 ```
 
-**A hosted API** — a strong baseline to compare a self-hosted model against. These need `--api-flavor`, which is **never inferred from the URL**: the same base URL can front either shape, and guessing wrong fails per element in a way that reads like a model problem.
+**A hosted API** — a strong baseline to compare a self-hosted model against. These need `--api-flavor`, which is **never inferred from the URL**: 
+the same base URL can front either shape, and guessing wrong fails per element in a way that reads like a model problem.
 
 ```bash
 # OpenAI — Bearer auth, and `max_completion_tokens` in place of `max_tokens`
@@ -203,8 +227,9 @@ One row per element, coordinates normalised to [0, 1]:
                   "the button that will allow the user to login to the system"]}
 ```
 
-**The same 841 screenshots are labelled three times: twice, independently, by two different models — and once by a human who adjudicated between them.** Same schema, same `screenshot_id`s, 
-same images — so any file works as `--dataset`, and scoring one model against the *other* model's labels is what the cross-score in the results above is.
+**The same 841 screenshots are labelled three times: twice, independently, by two different models — and once by a human who adjudicated between them.** 
+Same schema, same `screenshot_id`s, same images — so any file works as `--dataset`, 
+and scoring one model against the *other* model's labels is what the cross-score in the results above is.
 
 |                    | `dataset-v1.jsonl`                         | `dataset-v1-gpt-5.6.jsonl` | `dataset-v1-human.jsonl` |
 |--------------------|--------------------------------------------|---------------------------|-------------------------|
@@ -214,20 +239,29 @@ same images — so any file works as `--dataset`, and scoring one model against 
 | Screenshots covered | 841                                        | 839                       | 841                     |
 | Descriptions       | 3 per element (`name` / `label` / `intent`) | same                      | same                    |
 
-The two model labellings disagree about *what an element is*, not only about where its box goes: Opus found 10,314 and GPT-5.6 10,647 on the same screens, and there is **no shared element id to join on**. 
+The two model labellings disagree about *what an element is*, not only about where its box goes: 
+Opus found 10,314 and GPT-5.6 10,647 on the same screens, and there is **no shared element id to join on**. 
 Treat them as two opinions, not as one dataset in two files.
 
-The human file resolves that: the two labellings were paired element-by-element by box overlap (~12,000 physical elements), every frame was put in front of an independent human annotator on CVAT with both
-model boxes preloaded, and the box they settled on — confirmed, adjusted, or redrawn — is the row. Its element ids carry a `gpt-`/`opus-` prefix naming which labelling the element came from, and
-92 records the annotator flagged (55 *element not found*, 37 *description ambiguous*) are excluded. One asymmetry to know: where the two models had matched the same element, the frame showed GPT's
-phrasings, so on nested same-element-different-granularity pairs (the icon vs the row around it) the human was adjudicating GPT's description of it.
+The human file resolves that: the two labellings were paired element-by-element by box overlap (~12,000 physical elements), 
+every frame was put in front of an independent human annotator on CVAT with both model boxes preloaded, 
+and the box they settled on — confirmed, adjusted, or redrawn — is the row. 
+Its element ids carry a `gpt-`/`opus-` prefix naming which labelling the element came from, 
+and 92 records the annotator flagged (55 *element not found*, 37 *description ambiguous*) are excluded. 
+One asymmetry to know: where the two models had matched the same element, the frame showed GPT's phrasings, 
+so on nested same-element-different-granularity pairs (the icon vs the row around it) the human was adjudicating GPT's description of it.
 
-Screenshots are 841 Android, 1080×2400 throughout, crawled from **public app-store packages**. Every element was found, boxed and described by a frontier model, then spot-checked before the dataset was accepted.
+Screenshots are 841 Android, 1080×2400 throughout, crawled from **public app-store packages**. 
+Every element was found, boxed and described by a frontier model, then spot-checked before the dataset was accepted.
 
-**Ground truth from a model is a stated limitation, not a hidden one.** It buys ~10,000 elements instead of the few hundred hand-labelling would have produced, and the box convention is at least
-*consistent*, which is what makes the centroid/IoU split legible. The human labelling is what turned that limitation from assumed into measured — the label-quality numbers and what the adjudication found are the headline of [Results](#results).
+**Ground truth from a model is a stated limitation, not a hidden one.** 
+It buys ~10,000 elements instead of the few hundred hand-labelling would have produced, and the box convention is at least *consistent*, 
+which is what makes the centroid/IoU split legible. 
+The human labelling is what turned that limitation from assumed into measured — 
+the label-quality numbers and what the adjudication found are the headline of [Results](#results).
 
-Everything is in the repository: all three `.jsonl` files, their stats sidecars, and all 841 PNGs under `data/images/`, named `<screenshot_id>.png`. A clone is ~320 MB and is everything the benchmark needs; no separate download step required.
+Everything is in the repository: all three `.jsonl` files, their stats sidecars, and all 841 PNGs under `data/images/`, named `<screenshot_id>.png`. 
+A clone is ~320 MB and is everything the benchmark needs; no separate download step required.
 
 ---
 
@@ -240,73 +274,72 @@ Two metrics, both always computed. `--metric` only picks which one is the headli
 | **centroid** | the centre of the predicted box falls inside the ground-truth box | default |
 | IoU          | IoU(pred, gt) ≥ 0.5                                               |         |
 
-**Centroid is the default, and the reason is not that it is easier.** It is the question an automated tap actually asks: would the tap land on the control? 
-IoU asks something stricter: that the model also draw the same kind of box we do. Models tend to box the glyph, while our ground truth boxes the full control including its padding, 
+**Centroid is the default, and the reason is not that it is easier.** 
+It is the question an automated tap actually asks: would the tap land on the control? 
+IoU asks something stricter: that the model also draw the same kind of box we do. 
+Models tend to box the glyph, while our ground truth boxes the full control including its padding, 
 so an element that was located correctly can still fail IoU. 
 Centroid separates the two questions; IoU is carried as a secondary box-tightness figure, with the bias stated rather than corrected.
 
-**The benchmark prompt deliberately states no box convention at all.** Loading the labeller's rules into it would coach models toward the labeller's answer and measure agreement with our annotator rather than element localisation.
+**The benchmark prompt deliberately states no box convention at all.** 
+Loading the labeller's rules into it would coach models toward the labeller's answer and measure agreement with our annotator 
+rather than element localisation.
 
 ### Pixels, or a 0–1000 grid?
 
-**Which coordinate scale a model answers on is a property of the model, and it cannot be recovered
-from a single answer.** On a 1080×2400 screenshot `[67, 91]` is a legal pixel pair *and* a legal
-point on a 0–1000 grid, and the two readings are 2.4× apart on the y axis. Qwen2.5-VL answers in
-the screenshot's own pixels; GUI-Owl answers on a 0–1000 grid. Reading the grid as pixels gave us
-this, on a run that looked perfectly clean — 30,921 rows, 4 errors, every answer short and
-well-formed:
+**Which coordinate scale a model answers on is a property of the model, and it cannot be recovered from a single answer.** 
+On a 1080×2400 screenshot `[67, 91]` is a legal pixel pair *and* a legal point on a 0–1000 grid, 
+and the two readings are 2.4× apart on the y axis. 
+Qwen2.5-VL answers in the screenshot's own pixels; GUI-Owl answers on a 0–1000 grid.
+Reading the grid as pixels gave us this, on a run that looked perfectly clean — 
+30,921 rows, 4 errors, every answer short and well-formed:
 
 | GUI-Owl, same 30,921 answers | centroid   | IoU ≥ 0.5 |
 |------------------------------|------------|----------|
 | read as pixels               | **10.56%** | 0.95%    |
 | read on the 0–1000 grid      | **87.80%** | 2.93%    |
 
-So: **pilot 200 elements and read `summary.scale_check` before trusting anything.** If it flags,
-find the model's convention from its model card, add it to `COORD_GRIDS` in
-`benchmark/scoring/coords.py`, and re-score the pilot with `--rescore` rather than paying for
-the run twice. `scale_check` flags and never corrects, and `suspect: false` means "no evidence
-here" rather than "correct" — [`benchmark/README.md`](benchmark/README.md) explains why, and how
-the check's sensitivity depends on aspect ratio.
+So: **pilot 200 elements and read `summary.scale_check` before trusting anything.** 
+If it flags, find the model's convention from its model card, add it to `COORD_GRIDS` in `benchmark/scoring/coords.py`, 
+and re-score the pilot with `--rescore` rather than paying for the run twice. 
+`scale_check` flags and never corrects, and `suspect: false` means "no evidence here" rather than "correct" — 
+[`benchmark/README.md`](benchmark/README.md) explains why, and how the check's sensitivity depends on aspect ratio.
 
 ### How you ask for the coordinates changes the score
 
-The other half of the same problem: the grid above is how a model's answer is *read*, and this is
-how it was *asked*. `--prompt-style pixels`, the default, states the image size and asks for integer
-pixels. `--prompt-style normalized` asks for floats in [0, 1] and states no size.
+The other half of the same problem: the grid above is how a model's answer is *read*, and this is how it was *asked*. 
+`--prompt-style pixels`, the default, states the image size and asks for integer pixels. 
+`--prompt-style normalized` asks for floats in [0, 1] and states no size.
 
-That sounds cosmetic and is not. A model that ignores the instruction is unaffected — Qwen2.5-VL
-answers in pixels either way and the parser rescales — but a model that *obeys* it can be ruined by
-it. Over 200 elements × 3 phrasings, changing nothing else, one frontier model went from **7.79%**
-centroid to **90.33%**:
+That sounds cosmetic and is not. 
+A model that ignores the instruction is unaffected — Qwen2.5-VL answers in pixels either way and the parser rescales — 
+but a model that *obeys* it can be ruined by it. 
+Over 200 elements × 3 phrasings, changing nothing else, one frontier model went from **7.79%** centroid to **90.33%**:
 
 | same 200 elements, same ground truth   | centroid  | IoU ≥ 0.5 | median `dy` |
 |----------------------------------------|-----------|-----------|------------|
 | `normalized` — floats, no image size   | 7.79%     | 2.27%     | +0.0816    |
 | `pixels` — integers, image size stated | **90.33%** | **61.67%** | +0.0004    |
 
-Both runs had zero errors and returned a box on 100% of requests. The model was answering every
-time; under one prompt it was answering in a frame it had never been given — every prediction
-landing ~8% of the screen height too low. That is a harness result, not a model result, and it is
-the single most expensive thing to get wrong here.
+Both runs had zero errors and returned a box on 100% of requests. The model was answering every time; 
+under one prompt it was answering in a frame it had never been given — every prediction landing ~8% of the screen height too low. 
+That is a harness result, not a model result, and it is the single most expensive thing to get wrong here.
 
-So `prompt_style` is recorded in every result file, and two runs either side of it are not
-comparable. **The two open-weight rows above were measured under `normalized`** and are not
-understated by it, because Qwen ignores the instruction — but GUI-Owl has not been measured under
-`pixels` at all. [`benchmark/README.md`](benchmark/README.md) has the 10-element control that splits
-the cause into its two halves.
+So `prompt_style` is recorded in every result file, and two runs either side of it are not comparable. 
+**The two open-weight rows above were measured under `normalized`** and are not understated by it, 
+because Qwen ignores the instruction — but GUI-Owl has not been measured under `pixels` at all. 
+[`benchmark/README.md`](benchmark/README.md) has the 10-element control that splits the cause into its two halves.
 
 ### Screenshots go out at full resolution
 
-`--max-image-dim` defaults to `0`, and downscaling is not a benchmark setting: a comparison is
-meaningful only when every model saw the screenshot a consumer would actually send. We learned it
-expensively — an early run shrank every screenshot to a 1080px long edge and reported **70.07%**
-centroid for Qwen2.5-VL where native resolution reports **84.40%** on the same phrasing, same
-ground truth, same metric. A small control is ~34px across natively and ~15px after that resize,
-i.e. below what the model can resolve.
+`--max-image-dim` defaults to `0`, and downscaling is not a benchmark setting: a comparison is meaningful only when 
+every model saw the screenshot a consumer would actually send. 
+We learned it expensively — an early run shrank every screenshot to a 1080px long edge and reported **70.07%** centroid for Qwen2.5-VL 
+where native resolution reports **84.40%** on the same phrasing, same ground truth, same metric. 
+A small control is ~34px across natively and ~15px after that resize, i.e. below what the model can resolve.
 
-Treat a non-zero `max_image_dim` in a result file the way you would treat `PARTIAL` — check what
-the number describes before quoting it. Native costs roughly 4–5× the image tokens, and the image
-is essentially the whole input; `benchmark/README.md` has the measurements.
+Treat a non-zero `max_image_dim` in a result file the way you would treat `PARTIAL` — check what the number describes before quoting it. 
+Native costs roughly 4–5× the image tokens, and the image is essentially the whole input; `benchmark/README.md` has the measurements.
 
 ---
 
@@ -321,16 +354,15 @@ is essentially the whole input; `benchmark/README.md` has the measurements.
   Errors:       0 (timeout: 0)
 ```
 
-The JSON carries far more: `summary.by_description` has each phrasing scored separately,
-`summary.agreement` has how often the *same* element passes under one / all / some wordings, and
-every row keeps the model's own untruncated answer in `raw` plus the `img_w`/`img_h` it was
-normalised against. `benchmark/README.md` documents every field.
+The JSON carries far more: `summary.by_description` has each phrasing scored separately, 
+`summary.agreement` has how often the *same* element passes under one / all / some wordings, 
+and every row keeps the model's own untruncated answer in `raw` plus the `img_w`/`img_h` it was normalised against. 
+`benchmark/README.md` documents every field.
 
-**Read `served_model` before quoting a number.** `--model` is a request, not a guarantee: a server
-holding a single weight file answers every request with whatever is loaded, whatever name you ask
-for. Each run therefore records who actually replied, warns when that disagrees with `--model`, and
-marks the filename `-SERVED-<name>` — so you are told rather than having to check, but the field is
-still the one that says which model the score belongs to.
+**Read `served_model` before quoting a number.** `--model` is a request, not a guarantee: 
+a server holding a single weight file answers every request with whatever is loaded, whatever name you ask for. 
+Each run therefore records who actually replied, warns when that disagrees with `--model`, and marks the filename `-SERVED-<name>` — 
+so you are told rather than having to check, but the field is still the one that says which model the score belongs to.
 
 Three things the runner does that are worth knowing before a long run:
 
@@ -433,7 +465,8 @@ benchmark-results/          one JSON per benchmark run
 benchmark-results/checkpoints/   scored (element, phrasing) pairs, so a run resumes
 ```
 
-Nothing is uploaded anywhere and nothing is read from a network location: the corpus is in the clone, and the only address the tools contact is the model endpoint you give them.
+Nothing is uploaded anywhere and nothing is read from a network location: the corpus is in the clone, 
+and the only address the tools contact is the model endpoint you give them.
 
 ---
 
@@ -454,4 +487,6 @@ Nothing is uploaded anywhere and nothing is read from a network location: the co
 
 Code is [Apache-2.0](LICENSE).
 
-The annotations in `data/` are released for research and evaluation use. The screenshots depict third-party applications published on public app stores; their interfaces remain the property of their respective owners, and they are provided for benchmarking vision models rather than for redistribution as artwork.
+The annotations in `data/` are released for research and evaluation use. 
+The screenshots depict third-party applications published on public app stores; their interfaces remain the property of their respective owners, 
+and they are provided for benchmarking vision models rather than for redistribution as artwork.
