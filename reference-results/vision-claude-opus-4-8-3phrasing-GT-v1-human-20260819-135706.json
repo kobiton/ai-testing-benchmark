@@ -17,7 +17,7 @@
   "temperature": 0,
   "temperature_dropped": true,
   "thinking_budget": -1,
-  "rescored_at": "2026-09-07T04:34:14.825837+00:00",
+  "rescored_at": "2026-09-08T08:15:27.712732+00:00",
   "rescored_from_coord_grid": 0,
   "rescored_gt_prefix": "gpt",
   "rescored_rows_dropped_no_gt": 237,
@@ -120,6 +120,49 @@
       "all_accuracy": 0.8707,
       "mixed_count": 946
     },
+    "by_source": {
+      "gpt": {
+        "total": 31704,
+        "elements": 10568,
+        "centroid_pass_count": 29158,
+        "centroid_accuracy": 0.9197,
+        "iou_pass_count": 19564,
+        "iou_accuracy": 0.6171,
+        "mean_iou": 0.5617,
+        "median_iou": 0.6242,
+        "bbox_coverage": 1.0,
+        "error_count": 0,
+        "by_description": {
+          "0": {
+            "style": "name",
+            "total": 10568,
+            "centroid_accuracy": 0.9126,
+            "iou_accuracy": 0.612,
+            "median_iou": 0.6166
+          },
+          "1": {
+            "style": "label",
+            "total": 10568,
+            "centroid_accuracy": 0.9337,
+            "iou_accuracy": 0.6355,
+            "median_iou": 0.6418
+          },
+          "2": {
+            "style": "intent",
+            "total": 10568,
+            "centroid_accuracy": 0.9129,
+            "iou_accuracy": 0.6037,
+            "median_iou": 0.6139
+          }
+        },
+        "agreement": {
+          "scored_elements": 10568,
+          "any_accuracy": 0.9603,
+          "all_accuracy": 0.8707,
+          "mixed_count": 946
+        }
+      }
+    },
     "total_input_tokens": 115992200,
     "total_output_tokens": 495866,
     "avg_input_tokens": 3658.6,
@@ -136,5 +179,5 @@
   },
   "dataset_path": "data/dataset-v1-human.jsonl",
   "rescored_gt_from": "data/dataset-v1-gpt-5.6.jsonl",
-  "note": "Re-graded, not re-run. The answers are the 19 Aug 2026 three-phrasing run of Claude Opus 4.8 against the GPT-5.6 descriptions (vision-claude-opus-4-8-20260819-135706.json in this directory, originally scored on the GPT-5.6 label boxes); this file scores those same answers against the human-adjudicated boxes in data/dataset-v1-human.jsonl via --rescore --rescore-gt, with no new model call. Coverage is the 10,568 elements whose descriptions in the human set are GPT-5.6's (ids gpt-eN); the 1,346 Opus-only elements have no Opus answer on record and are not in this file. The 237 dropped rows are the 79 elements the annotator flagged not_found/ambiguous, times three phrasings. No description mismatches, no ambiguous joins."
+  "note": "Re-graded, not re-run. The answers are the 19 Aug 2026 three-phrasing run of Claude Opus 4.8 against the GPT-5.6 descriptions (vision-claude-opus-4-8-20260819-135706.json in this directory, originally scored on the GPT-5.6 label boxes); this file scores those same answers against the human-adjudicated boxes in data/dataset-v1-human.jsonl via --rescore --rescore-gt, with no new model call. Coverage is the 10,568 elements whose descriptions in the human set are GPT-5.6's (ids gpt-eN, summary.by_source.gpt); the 1,346 Opus-only elements have no Opus answer on record and are not in this file. The 237 dropped rows are the 79 elements the annotator flagged not_found/ambiguous, times three phrasings. No description mismatches, no ambiguous joins."
 }

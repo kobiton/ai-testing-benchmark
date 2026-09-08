@@ -28,23 +28,26 @@ Published so you can check our numbers and score your own model on the same corp
 
 ## Results
 
-**Scored against the human-adjudicated ground truth** (see `data/dataset-v1-human.jsonl`), 11,914 elements: an independent 
-human annotator settled every element the two frontier labellings disagreed on and verified the ones they agreed on 
-(how it was built is under [The dataset](#the-dataset)).
+**Scored against the human-adjudicated ground truth** (`data/dataset-v1-human.jsonl`): an independent human annotator 
+settled every element the two frontier labellings disagreed on and verified the ones they agreed on 
+(how it was built is under [The dataset](#the-dataset)). 
+Every row is over the same **10,568 elements** — the ones GPT-5.6 described, which every model here has an answer for.
 
-|                            | elements | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
-|----------------------------|---------|------------------------------|-------------------------|-------------|---------------|----------|
-| **GPT-5.6**                | 10,568  | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
-| **Claude Opus 4.8**        | 10,568  | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
-| **Qwen2.5-VL-7B-Instruct** | 11,914  | 83.5%                        | 55.1%                   | 0.552       | 99.98%        | pixels   |
-| GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩   | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
+|                            | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
+|----------------------------|------------------------------|-------------------------|-------------|---------------|----------|
+| **GPT-5.6**                | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
+| **Claude Opus 4.8**        | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
+| **Qwen2.5-VL-7B-Instruct** | 84.6%                        | 55.4%                   | 0.553       | 99.98%        | pixels   |
+| GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
 
 The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by 
 adjudicating between those very boxes — so read it as label quality, not a benchmark answer. 
-The other three rows are benchmark answers: screenshot + one name-phrasing description in, box out. 
-Opus was asked the 10,568 elements that carry GPT-5.6's descriptions, all three phrasings each; the name phrasing is shown. 
-Averaged over the three it scores 91.97% centroid, and 87.07% of elements pass under all three (summary in `reference-results/`). 
-Qwen was likewise asked all three phrasings on the same endpoint: 84.87% averaged, 73.92% passing all three.
+The other three rows are benchmark answers: screenshot + one description in, box out. 
+All three phrasings were asked and `name` is shown; averaged over the three, 
+Opus scores 91.97% centroid with 87.07% of elements passing under all three, 
+Qwen 85.99% and 75.58% (see [How much the wording matters](#how-much-the-wording-matters)). 
+In a result file this table is `summary.by_source.gpt`; a run over the whole file also reports the all-elements figure 
+(Qwen: 83.5% centroid over 11,914).
 
 *Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩.
 
@@ -73,7 +76,7 @@ the ground-truth boxes and the model's side by side over each screenshot, every 
 
 Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
 The headline table shows `name`; this section is what the other two add. 
-The Opus and Qwen figures are on the human ground truth (Opus over its 10,568 elements, Qwen over all 11,914 on the production endpoint). 
+The Opus and Qwen figures are on the human ground truth, over the same 10,568 elements as the headline table (Qwen on the production endpoint). 
 The GPT-5.6 and GUI-Owl figures still come from the earlier cross-labelled runs — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), GUI-Owl as a Q4_K_M GGUF on an Apple Silicon Mac mini
 against the same labels — and will move to the human ground truth as those runs are repeated on it. 
 The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
@@ -90,9 +93,9 @@ Asked the same element three ways, every model moves more than the gap between m
 
 | Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8  | Qwen2.5-VL | GUI-Owl    |
 |----------------------------|------------------------------------------------------------|------------|-----------|------------|------------|
-| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 83.47%     | 85.79%     |
-| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **89.52%** | **90.34%** |
-| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 81.61%     | 87.28%     |
+| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 84.60%     | 85.79%     |
+| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **90.17%** | **90.34%** |
+| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 83.19%     | 87.28%     |
 
 All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. 
 Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name` hardest.
@@ -110,11 +113,11 @@ Measured per element:
 |--------------------------|-----------------|---------------------------|
 | GPT-5.6                  | 95.62%          | **92.48%**                |
 | Claude Opus 4.8          | 91.97%          | **87.07%**                |
-| Qwen2.5-VL-7B-Instruct   | 84.87%          | **73.92%**                |
+| Qwen2.5-VL-7B-Instruct   | 85.99%          | **75.58%**                |
 | GUI-Owl-1.5-8B-Instruct  | 87.80%          | **77.62%**                |
 
 So the figure to plan reliability against is three points below the headline for the strongest model here and
-ten to eleven for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
+about ten for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
 (`summary.agreement` in every multi-phrasing result file carries these counts.)
 
 Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 
@@ -356,6 +359,7 @@ Native costs roughly 4–5× the image tokens, and the image is essentially the 
 
 The JSON carries far more: `summary.by_description` has each phrasing scored separately, 
 `summary.agreement` has how often the *same* element passes under one / all / some wordings, 
+`summary.by_source` has the figures split by which labelling the element came from (`gpt-`/`opus-` ids — the headline table above is `by_source.gpt`), 
 and every row keeps the model's own untruncated answer in `raw` plus the `img_w`/`img_h` it was normalised against. 
 `benchmark/README.md` documents every field.
 

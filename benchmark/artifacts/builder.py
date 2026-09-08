@@ -16,6 +16,7 @@ reasoning for each is in `benchmark/README.md` under "Output JSON format". They 
 to compute and were each added after a figure was misread.
 """
 import logging
+import re
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -27,6 +28,83 @@ from benchmark.model.client import _TEMPERATURE_REJECTED
 from benchmark.workload.phrasings import _expand_pairs, _style_of
 
 logger = logging.getLogger(__name__)
+
+
+_SOURCE_ID_RE = re.compile(r"^([a-z0-9]+)-e\d+$")
+
+
+def _by_source(results: list, description_indices: list, metric: str) -> dict:
+    """The summary's headline figures again, once per labelling the element ids name.
+
+    `dataset-v1-human.jsonl` prefixes every element id with the model whose descriptions the
+    annotator read — `gpt-e12`, `opus-e7` — because the two labellings found different
+    elements: 10,568 carry GPT-5.6's wording, 1,346 were found by Opus alone. Those two
+    populations are not equally hard, and not every model has answers for both: the frontier
+    rows exist only for the GPT-described set, while a fresh run over the whole file covers
+    everything. A single accuracy over 11,914 rows therefore compares one model on the harder
+    superset against another on the shared subset, and the reader cannot tell.
+
+    This block makes the split a fact of every result file rather than a filter someone
+    applies by hand: `by_source.gpt` is the figure comparable across every model, and
+    `by_source.opus` is the one-labeller-only study. Omitted when no id carries a prefix, so
+    a dataset with plain `e12` ids is unaffected. Per-phrasing and any/all figures are
+    repeated inside each entry for multi-phrasing runs, for the same reason the top level
+    carries them.
+    """
+    groups: dict = {}
+    for r in results:
+        m = _SOURCE_ID_RE.match(str(r.get("element_id", "")))
+        if m:
+            groups.setdefault(m.group(1), []).append(r)
+    if not groups:
+        return {}
+
+    def passed(r: dict) -> bool:
+        return bool(r.get("pass_centroid") if metric == "centroid" else r.get("pass_iou"))
+
+    def stats(rows: list) -> dict:
+        n = len(rows)
+        ious = [r["iou"] for r in rows if r["pred_bbox"] is not None]
+        out = {
+            "total": n,
+            "elements": len({(r["screenshot_id"], r["element_id"]) for r in rows}),
+            "centroid_pass_count": sum(1 for r in rows if r["pass_centroid"]),
+            "centroid_accuracy": round(sum(1 for r in rows if r["pass_centroid"]) / n, 4) if n else 0,
+            "iou_pass_count": sum(1 for r in rows if r["pass_iou"]),
+            "iou_accuracy": round(sum(1 for r in rows if r["pass_iou"]) / n, 4) if n else 0,
+            "mean_iou": round(statistics.mean(ious), 4) if ious else 0,
+            "median_iou": round(statistics.median(ious), 4) if ious else 0,
+            "bbox_coverage": round(len(ious) / n, 4) if n else 0,
+            "error_count": sum(1 for r in rows if r["error"]),
+        }
+        if len(description_indices) > 1:
+            out["by_description"] = {}
+            for idx in sorted({r.get("description_index", 0) for r in rows}):
+                d_rows = [r for r in rows if r.get("description_index", 0) == idx]
+                d_ious = [r["iou"] for r in d_rows if r["pred_bbox"] is not None]
+                dn = len(d_rows)
+                out["by_description"][str(idx)] = {
+                    "style": _style_of(idx),
+                    "total": dn,
+                    "centroid_accuracy": round(sum(1 for r in d_rows if r["pass_centroid"]) / dn, 4) if dn else 0,
+                    "iou_accuracy": round(sum(1 for r in d_rows if r["pass_iou"]) / dn, 4) if dn else 0,
+                    "median_iou": round(statistics.median(d_ious), 4) if d_ious else 0,
+                }
+            per_element: dict = {}
+            for r in rows:
+                per_element.setdefault((r["screenshot_id"], r["element_id"]), []).append(passed(r))
+            full = [v for v in per_element.values() if len(v) == len(description_indices)]
+            any_pass = sum(1 for v in full if any(v))
+            all_pass = sum(1 for v in full if all(v))
+            out["agreement"] = {
+                "scored_elements": len(full),
+                "any_accuracy": round(any_pass / len(full), 4) if full else 0,
+                "all_accuracy": round(all_pass / len(full), 4) if full else 0,
+                "mixed_count": any_pass - all_pass,
+            }
+        return out
+
+    return {src: stats(rows) for src, rows in sorted(groups.items())}
 
 
 def build_result(
@@ -185,6 +263,8 @@ def build_result(
             "mixed_count": any_pass - all_pass,
         }
 
+    by_source = _by_source(results, description_indices, metric)
+
     summary = {
         # Rows, i.e. how many times a model was asked to ground something. On a
         # multi-phrasing run this is elements x phrasings, and every accuracy here is
@@ -232,6 +312,10 @@ def build_result(
         # and `any`/`all` would both equal the accuracy. Absent means "not measured".
         **({"by_description": by_description} if by_description else {}),
         **({"agreement": agreement} if agreement else {}),
+        # The same figures per labelling the element ids name (`gpt-e12` / `opus-e7`):
+        # `by_source.gpt` is the set every model has answers for, `by_source.opus` the
+        # one-labeller-only study. Omitted when ids carry no prefix. See `_by_source`.
+        **({"by_source": by_source} if by_source else {}),
         # Tokens — the cost column. Self-hosted models have no per-token price, so the
         # figure to compare is throughput: tokens and seconds per element at a known
         # concurrency, against the hourly cost of the GPU.

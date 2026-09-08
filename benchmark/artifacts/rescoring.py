@@ -232,6 +232,11 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
                     dropped_no_gt += 1
                 continue
             r["gt_bbox"] = human["bbox"]
+            # The row now describes the override's element, so it takes the override's id —
+            # `gpt-e12` rather than the bare `e12` of the run's own dataset. That is what lets
+            # `summary.by_source` see which labelling the element came from, and what keeps
+            # the ids in the file consistent with the `dataset_path` it now names.
+            r["element_id"] = human.get("element_id", r.get("element_id"))
             idx = r.get("description_index", 0)
             descs = human.get("descriptions") or []
             if idx < len(descs) and descs[idx] != r.get("description"):

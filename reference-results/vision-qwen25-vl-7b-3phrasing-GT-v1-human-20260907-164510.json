@@ -17,6 +17,8 @@
   "temperature": 0,
   "temperature_dropped": false,
   "thinking_budget": -1,
+  "rescored_at": "2026-09-08T08:15:32.005448+00:00",
+  "rescored_from_coord_grid": 0,
   "summary": {
     "total_elements": 35742,
     "unique_elements": 11914,
@@ -114,6 +116,90 @@
       "all_accuracy": 0.7392,
       "mixed_count": 2326
     },
+    "by_source": {
+      "gpt": {
+        "total": 31704,
+        "elements": 10568,
+        "centroid_pass_count": 27261,
+        "centroid_accuracy": 0.8599,
+        "iou_pass_count": 18277,
+        "iou_accuracy": 0.5765,
+        "mean_iou": 0.5197,
+        "median_iou": 0.5652,
+        "bbox_coverage": 0.9999,
+        "error_count": 4,
+        "by_description": {
+          "0": {
+            "style": "name",
+            "total": 10568,
+            "centroid_accuracy": 0.846,
+            "iou_accuracy": 0.5537,
+            "median_iou": 0.5527
+          },
+          "1": {
+            "style": "label",
+            "total": 10568,
+            "centroid_accuracy": 0.9017,
+            "iou_accuracy": 0.6386,
+            "median_iou": 0.6017
+          },
+          "2": {
+            "style": "intent",
+            "total": 10568,
+            "centroid_accuracy": 0.8319,
+            "iou_accuracy": 0.5371,
+            "median_iou": 0.5343
+          }
+        },
+        "agreement": {
+          "scored_elements": 10568,
+          "any_accuracy": 0.9392,
+          "all_accuracy": 0.7558,
+          "mixed_count": 1938
+        }
+      },
+      "opus": {
+        "total": 4038,
+        "elements": 1346,
+        "centroid_pass_count": 3072,
+        "centroid_accuracy": 0.7608,
+        "iou_pass_count": 2175,
+        "iou_accuracy": 0.5386,
+        "mean_iou": 0.5047,
+        "median_iou": 0.5417,
+        "bbox_coverage": 1.0,
+        "error_count": 0,
+        "by_description": {
+          "0": {
+            "style": "name",
+            "total": 1346,
+            "centroid_accuracy": 0.7467,
+            "iou_accuracy": 0.526,
+            "median_iou": 0.5337
+          },
+          "1": {
+            "style": "label",
+            "total": 1346,
+            "centroid_accuracy": 0.844,
+            "iou_accuracy": 0.5914,
+            "median_iou": 0.5923
+          },
+          "2": {
+            "style": "intent",
+            "total": 1346,
+            "centroid_accuracy": 0.6917,
+            "iou_accuracy": 0.4985,
+            "median_iou": 0.496
+          }
+        },
+        "agreement": {
+          "scored_elements": 1346,
+          "any_accuracy": 0.8975,
+          "all_accuracy": 0.6092,
+          "mixed_count": 388
+        }
+      }
+    },
     "total_input_tokens": 128019693,
     "total_output_tokens": 717242,
     "avg_input_tokens": 3581.8,
@@ -129,5 +215,5 @@
     "p95_latency_ms": 8541.3
   },
   "dataset_path": "data/dataset-v1-human.jsonl",
-  "note": "Scored against the human-adjudicated ground truth (data/dataset-v1-human.jsonl, 11,914 elements), all three phrasings, 35,742 requests. Endpoint: a production vLLM deployment on a GPU cluster - not the Q4 laptop build of the earlier runs. The 4 errors are the model answering in prose ('There are none.') instead of a box; prose is counted as a failure. The name-phrasing rows are the 4 Sep 2026 run carried forward by checkpoint; label and intent were added on 7 Sep."
+  "note": "Scored against the human-adjudicated ground truth (data/dataset-v1-human.jsonl, 11,914 elements), all three phrasings, 35,742 requests. Endpoint: a production vLLM deployment on a GPU cluster - not the Q4 laptop build of the earlier runs. The 4 errors are the model answering in prose ('There are none.') instead of a box; prose is counted as a failure. The name-phrasing rows are the 4 Sep 2026 run carried forward by checkpoint; label and intent were added on 7 Sep. summary.by_source splits the figures by labelling: .gpt is the 10,568-element set shared with the frontier rows (the README headline), .opus the 1,346 elements only Opus found. The summary was re-read on 8 Sep to add that block; no answer changed."
 }
