@@ -66,6 +66,8 @@ What the human adjudication itself found, in one pass over every kind of disagre
   "Two independent models agree" holds up well as ground truth — with a ~2% blind spot that is now a measurement rather than an assumption.
 - **Where they placed the box in genuinely different places** (318 elements), the human sided with GPT about 2:1 — 
   72% of GPT's boxes vs 32% of Opus's reach IoU ≥ 0.5 against the human's.
+- The 55 *not found* and 37 *ambiguous* elements are listed, with links to the annotation frames, in 
+  [`reference-results/flagged-by-annotator.md`](reference-results/flagged-by-annotator.md).
 - Caveat: matched-pair frames carried GPT's phrasing (see the dataset note), which favours GPT's granularity choice on nested pairs. 
   The conflict and one-model-only numbers do not depend on that choice.
 
