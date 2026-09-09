@@ -26,7 +26,7 @@ from benchmark.scoring.coords import _coord_grid_for, _normalize_model_name
 from benchmark.scoring.metrics import IOU_THRESHOLD, _compute_iou, _point_inside_bbox
 from benchmark.model.client import _call_model, _list_loaded_models, _probe_served_model
 from benchmark.workload.phrasings import _expand_pairs, _style_of
-from benchmark.artifacts.builder import build_result
+from benchmark.artifacts.builder import build_result, gt_boxes_from_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -341,4 +341,5 @@ def run_benchmark(
         selected_elements=len(pairs),
         stopped_early=stopped_early,
         checkpoint_path=str(ckpt),
+        gt_boxes=gt_boxes_from_dataset(dataset),
     )

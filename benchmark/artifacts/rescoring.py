@@ -315,8 +315,17 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
     indices = prior.get("description_indices")
     if not indices:
         indices = [prior.get("description_index", 0)]
+    # With an override, its boxes are the complete picture of each screenshot; the rows
+    # alone hold only the elements this run was asked about — see `_answer_classes`.
+    gt_boxes = None
+    if gt_override is not None:
+        gt_boxes = {}
+        for cands in gt_override.values():
+            for h in cands:
+                gt_boxes.setdefault(h.get("screenshot_id"), {})[str(h.get("element_id"))] = h["bbox"]
     result = build_result(
         results=out_rows,
+        gt_boxes=gt_boxes,
         model=prior.get("model", ""),
         served_model=prior.get("served_model", ""),
         mismatch=bool(prior.get("model_mismatch")),

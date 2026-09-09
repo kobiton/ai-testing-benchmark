@@ -33,6 +33,96 @@ logger = logging.getLogger(__name__)
 _SOURCE_ID_RE = re.compile(r"^([a-z0-9]+)-e\d+$")
 
 
+# Answer classes — what the model did, not only whether it passed. See `_answer_classes`.
+ANSWER_CLASSES = ("right_element", "other_element", "near_miss", "empty_space", "declined", "non_answer")
+_DECLINED_PREFIXES = ("no coordinates in response", "empty response")
+
+
+def gt_boxes_from_dataset(dataset: list) -> dict:
+    """`{screenshot_id: {element_id: bbox}}` for `_answer_classes`, from the dataset rows."""
+    out: dict = {}
+    for r in dataset:
+        if r.get("bbox"):
+            out.setdefault(r.get("screenshot_id"), {})[str(r.get("element_id"))] = r["bbox"]
+    return out
+
+
+def _answer_classes(results: list, metric: str, gt_boxes: dict = None) -> dict:
+    """Label every row with what the model did, and count the labels.
+
+    Pass/fail says a prediction was wrong; it does not say *how*, and the how is the
+    question a model-selection reader asks next: did the model pick a different control,
+    aim at the right one and miss, point at nothing, or refuse? Each row gets an
+    `answer_class`, judged from the centre the pass metric already uses:
+
+    - `right_element`  — centre inside the element asked for (the centroid pass).
+    - `other_element`  — centre inside *another* labelled element on the same screenshot;
+                          the row also records which one in `answer_class_target`. This is
+                          "chose the wrong element" in the strict sense.
+    - `near_miss`      — the box overlaps the element asked for but its centre falls outside:
+                          right control, loose box. Kept apart from `other_element` because
+                          calling it a wrong choice would be false. Cannot occur for a
+                          point-only answer, which has no area to overlap with.
+    - `empty_space`    — centre on no labelled element at all.
+    - `declined`       — no box because the model answered in prose ("There are none."): the
+                          only false negative this prompt can produce, and rare, because the
+                          prompt allows no such answer. Read the count as a fact about the
+                          prompt before reading it as one about the model.
+    - `non_answer`     — timeout, HTTP error, truncation: nothing the model decided.
+
+    The other elements' boxes come from `gt_boxes` — the dataset, via
+    `gt_boxes_from_dataset` — when the caller has it, and from the run's own rows on the
+    same screenshot otherwise. The difference matters: a file re-graded onto the human
+    ground truth with `--rescore-gt` holds only the 10,568 elements the run was asked
+    about, and 65 of Opus's misses landed on one of the 1,346 elements it was never asked
+    about — invisible from the rows, a wrong element all the same. A `--limit` run without
+    the dataset under-counts `other_element` the same way. Counts are returned per class;
+    `metric` decides nothing here — the classes are geometric.
+    """
+    by_screenshot: dict = {sid: dict(boxes) for sid, boxes in (gt_boxes or {}).items()}
+    for r in results:
+        by_screenshot.setdefault(r.get("screenshot_id"), {}).setdefault(r.get("element_id"), r.get("gt_bbox") or {})
+
+    def inside(cx: float, cy: float, b: dict) -> bool:
+        return bool(b) and b["x"] <= cx <= b["x"] + b["width"] and b["y"] <= cy <= b["y"] + b["height"]
+
+    counts = {c: 0 for c in ANSWER_CLASSES}
+    for r in results:
+        r.pop("answer_class_target", None)
+        err = r.get("error") or ""
+        if err:
+            cls = "declined" if err.startswith(_DECLINED_PREFIXES) else "non_answer"
+        elif r.get("pass_centroid"):
+            cls = "right_element"
+        else:
+            if r.get("pred_bbox"):
+                b = r["pred_bbox"]
+                cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+            elif r.get("pred_point"):
+                cx, cy = r["pred_point"]["x"], r["pred_point"]["y"]
+            else:
+                cx = cy = None
+            if cx is None:
+                cls = "non_answer"
+            else:
+                hits = [(eid, gb) for eid, gb in by_screenshot.get(r.get("screenshot_id"), {}).items()
+                        if eid != r.get("element_id") and inside(cx, cy, gb)]
+                if hits:
+                    # Several nested controls can contain the point; the smallest is the one
+                    # a tap would land on, and the one a reader would say was chosen.
+                    hits.sort(key=lambda h: h[1]["width"] * h[1]["height"])
+                    cls = "other_element"
+                    r["answer_class_target"] = hits[0][0]
+                elif (r.get("iou") or 0) > 0:
+                    cls = "near_miss"
+                else:
+                    cls = "empty_space"
+        r["answer_class"] = cls
+        counts[cls] += 1
+    total = len(results)
+    return {c: {"count": n, "share": round(n / total, 4) if total else 0} for c, n in counts.items()}
+
+
 def _by_source(results: list, description_indices: list, metric: str) -> dict:
     """The summary's headline figures again, once per labelling the element ids name.
 
@@ -68,6 +158,9 @@ def _by_source(results: list, description_indices: list, metric: str) -> dict:
         out = {
             "total": n,
             "elements": len({(r["screenshot_id"], r["element_id"]) for r in rows}),
+            "answer_classes": {c: {"count": sum(1 for r in rows if r.get("answer_class") == c),
+                                   "share": round(sum(1 for r in rows if r.get("answer_class") == c) / n, 4) if n else 0}
+                               for c in ANSWER_CLASSES},
             "centroid_pass_count": sum(1 for r in rows if r["pass_centroid"]),
             "centroid_accuracy": round(sum(1 for r in rows if r["pass_centroid"]) / n, 4) if n else 0,
             "iou_pass_count": sum(1 for r in rows if r["pass_iou"]),
@@ -134,6 +227,7 @@ def build_result(
     # way a result can claim a prompt it did not use.
     *,
     prompt_style: str,
+    gt_boxes: dict = None,
 ) -> dict:
     """Score `results` and shape them into the result file.
 
@@ -263,6 +357,8 @@ def build_result(
             "mixed_count": any_pass - all_pass,
         }
 
+    # Labels every row first (`answer_class`), so `_by_source` can count them per labelling.
+    answer_classes = _answer_classes(results, metric, gt_boxes)
     by_source = _by_source(results, description_indices, metric)
 
     summary = {
@@ -316,6 +412,8 @@ def build_result(
         # `by_source.gpt` is the set every model has answers for, `by_source.opus` the
         # one-labeller-only study. Omitted when ids carry no prefix. See `_by_source`.
         **({"by_source": by_source} if by_source else {}),
+        # What the model did on every row, not only whether it passed — see `_answer_classes`.
+        "answer_classes": answer_classes,
         # Tokens — the cost column. Self-hosted models have no per-token price, so the
         # figure to compare is throughput: tokens and seconds per element at a known
         # concurrency, against the hourly cost of the GPU.
@@ -535,4 +633,5 @@ def finalize_from_checkpoint(
         selected_elements=len(pairs),
         stopped_early=True,
         checkpoint_path=str(ckpt),
+        gt_boxes=gt_boxes_from_dataset(dataset),
     )

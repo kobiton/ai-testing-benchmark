@@ -17,7 +17,7 @@
   "temperature": 0,
   "temperature_dropped": true,
   "thinking_budget": -1,
-  "rescored_at": "2026-09-08T08:15:27.712732+00:00",
+  "rescored_at": "2026-09-09T08:31:44.588050+00:00",
   "rescored_from_coord_grid": 0,
   "rescored_gt_prefix": "gpt",
   "rescored_rows_dropped_no_gt": 237,
@@ -124,6 +124,32 @@
       "gpt": {
         "total": 31704,
         "elements": 10568,
+        "answer_classes": {
+          "right_element": {
+            "count": 29158,
+            "share": 0.9197
+          },
+          "other_element": {
+            "count": 900,
+            "share": 0.0284
+          },
+          "near_miss": {
+            "count": 1357,
+            "share": 0.0428
+          },
+          "empty_space": {
+            "count": 289,
+            "share": 0.0091
+          },
+          "declined": {
+            "count": 0,
+            "share": 0.0
+          },
+          "non_answer": {
+            "count": 0,
+            "share": 0.0
+          }
+        },
         "centroid_pass_count": 29158,
         "centroid_accuracy": 0.9197,
         "iou_pass_count": 19564,
@@ -161,6 +187,32 @@
           "all_accuracy": 0.8707,
           "mixed_count": 946
         }
+      }
+    },
+    "answer_classes": {
+      "right_element": {
+        "count": 29158,
+        "share": 0.9197
+      },
+      "other_element": {
+        "count": 900,
+        "share": 0.0284
+      },
+      "near_miss": {
+        "count": 1357,
+        "share": 0.0428
+      },
+      "empty_space": {
+        "count": 289,
+        "share": 0.0091
+      },
+      "declined": {
+        "count": 0,
+        "share": 0.0
+      },
+      "non_answer": {
+        "count": 0,
+        "share": 0.0
       }
     },
     "total_input_tokens": 115992200,

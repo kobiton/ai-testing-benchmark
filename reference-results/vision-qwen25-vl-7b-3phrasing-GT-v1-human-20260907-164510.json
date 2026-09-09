@@ -17,7 +17,7 @@
   "temperature": 0,
   "temperature_dropped": false,
   "thinking_budget": -1,
-  "rescored_at": "2026-09-08T08:15:32.005448+00:00",
+  "rescored_at": "2026-09-09T08:31:47.535261+00:00",
   "rescored_from_coord_grid": 0,
   "summary": {
     "total_elements": 35742,
@@ -120,6 +120,32 @@
       "gpt": {
         "total": 31704,
         "elements": 10568,
+        "answer_classes": {
+          "right_element": {
+            "count": 27261,
+            "share": 0.8599
+          },
+          "other_element": {
+            "count": 2260,
+            "share": 0.0713
+          },
+          "near_miss": {
+            "count": 1518,
+            "share": 0.0479
+          },
+          "empty_space": {
+            "count": 661,
+            "share": 0.0208
+          },
+          "declined": {
+            "count": 4,
+            "share": 0.0001
+          },
+          "non_answer": {
+            "count": 0,
+            "share": 0.0
+          }
+        },
         "centroid_pass_count": 27261,
         "centroid_accuracy": 0.8599,
         "iou_pass_count": 18277,
@@ -161,6 +187,32 @@
       "opus": {
         "total": 4038,
         "elements": 1346,
+        "answer_classes": {
+          "right_element": {
+            "count": 3072,
+            "share": 0.7608
+          },
+          "other_element": {
+            "count": 589,
+            "share": 0.1459
+          },
+          "near_miss": {
+            "count": 214,
+            "share": 0.053
+          },
+          "empty_space": {
+            "count": 163,
+            "share": 0.0404
+          },
+          "declined": {
+            "count": 0,
+            "share": 0.0
+          },
+          "non_answer": {
+            "count": 0,
+            "share": 0.0
+          }
+        },
         "centroid_pass_count": 3072,
         "centroid_accuracy": 0.7608,
         "iou_pass_count": 2175,
@@ -198,6 +250,32 @@
           "all_accuracy": 0.6092,
           "mixed_count": 388
         }
+      }
+    },
+    "answer_classes": {
+      "right_element": {
+        "count": 30333,
+        "share": 0.8487
+      },
+      "other_element": {
+        "count": 2849,
+        "share": 0.0797
+      },
+      "near_miss": {
+        "count": 1732,
+        "share": 0.0485
+      },
+      "empty_space": {
+        "count": 824,
+        "share": 0.0231
+      },
+      "declined": {
+        "count": 4,
+        "share": 0.0001
+      },
+      "non_answer": {
+        "count": 0,
+        "share": 0.0
       }
     },
     "total_input_tokens": 128019693,
