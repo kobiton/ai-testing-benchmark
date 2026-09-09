@@ -1,6 +1,6 @@
-# GPT-5.6 (label boxes) — the failures, one by one
+# GPT-5.6 — the failures, one by one
 
-**These rows are label boxes, not answers**: the boxes the model drew while describing each element when the corpus was built, compared with where the human annotator put the box. Result file `vision-gpt-5.6-terra-labels-GT-human-20260903-100929.json`, `gpt-` elements only, phrasing 0 (`name`): **10,568** answers, **384** of them wrong (3.6%).
+Each row is one question the model was asked — a screenshot and one description — and what it did. Result file `vision-gpt-5.6-terra-labels-GT-human-20260903-100929.json`, `gpt-` elements only, phrasing 0 (`name`): **10,568** answers, **384** of them wrong (3.6%).
 
 Every answer is classified from the centre of its box against every human-drawn element on the same screen. The **open** link shows that screenshot in the viewer with the ground-truth box, the model's box, and — for a wrong element — the control it chose, drawn dashed red. Lists are worst-first and capped per class; the counts are complete.
 
