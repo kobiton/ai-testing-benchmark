@@ -99,7 +99,8 @@ def _answer_classes(results: list, metric: str, gt_boxes: dict = None) -> dict:
                 b = r["pred_bbox"]
                 cx, cy = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
             elif r.get("pred_point"):
-                cx, cy = r["pred_point"]["x"], r["pred_point"]["y"]
+                # Points are stored as cx/cy (see scoring/parsing.py); x/y is tolerated for older files.
+                pt = r["pred_point"]; cx, cy = pt.get("cx", pt.get("x")), pt.get("cy", pt.get("y"))
             else:
                 cx = cy = None
             if cx is None:
