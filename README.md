@@ -33,12 +33,12 @@ settled every element the two frontier labellings disagreed on and verified the 
 (how it was built is under [The dataset](#the-dataset)). 
 Every row is over the same **10,568 elements** — the ones GPT-5.6 described, which every model here has an answer for.
 
-|                            | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
-|----------------------------|------------------------------|-------------------------|-------------|---------------|----------|
-| **GPT-5.6**                | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
-| **Claude Opus 4.8**        | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
-| **Qwen2.5-VL-7B-Instruct** | 84.6%                        | 55.4%                   | 0.553       | 99.98%        | pixels   |
-| GUI-Owl-1.5-8B-Instruct    | ⟨TBD⟩                        | ⟨TBD⟩                   | ⟨TBD⟩       | ⟨TBD⟩         | floats   |
+|                             | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
+|-----------------------------|------------------------------|-------------------------|-------------|---------------|----------|
+| **GPT-5.6**                 | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
+| **Claude Opus 4.8**         | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
+| **Qwen2.5-VL-7B-Instruct**  | 84.6%                        | 55.4%                   | 0.553       | 99.98%        | pixels   |
+| **GUI-Owl-1.5-8B-Instruct** | 81.8%                        | 2.1%                    | 0.216       | 16.4%         | floats   |
 
 The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by 
 adjudicating between those very boxes — so read it as label quality, not a benchmark answer. 
@@ -49,7 +49,9 @@ Qwen 85.99% and 75.58% (see [How much the wording matters](#how-much-the-wording
 In a result file this table is `summary.by_source.gpt`; a run over the whole file also reports the all-elements figure 
 (Qwen: 83.5% centroid over 11,914).
 
-*Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster; ⟨TBD GUI-Owl deployment⟩.
+*Deployment:* the Qwen row was measured against a production vLLM serving on a GPU cluster, 
+the GUI-Owl row against llama.cpp serving the Q4_K_M GGUF on an Apple Silicon Mac mini, single-stream. 
+Accuracy is comparable across the two; latency is not, and is not quoted here.
 
 **Mind the last column.** GPT-5.6 and Opus were asked for integer pixels, Qwen and GUI-Owl for floats in [0, 1], 
 and that is not a free choice — see [How you ask for the coordinates changes the score](#how-you-ask-for-the-coordinates-changes-the-score), 
@@ -81,16 +83,20 @@ over the same 10,568 elements and the `name` phrasing as the headline table:
 
 |                                                                  | GPT-5.6 | Claude Opus 4.8 | Qwen2.5-VL-7B | GUI-Owl-1.5-8B |
 |------------------------------------------------------------------|---------|-----------------|---------------|----------------|
-| right element (centre inside it)                                 | 96.4%   | 91.3%           | 84.6%         | ⟨TBD⟩          |
-| **wrong element** — centre inside a *different* labelled element | 1.2%    | 3.2%            | 8.5%          | ⟨TBD⟩          |
-| near miss — overlaps the right element, centre just outside      | 2.2%    | 4.6%            | 4.6%          | ⟨TBD⟩          |
-| empty space — centre on no labelled element                      | 0.2%    | 1.0%            | 2.3%          | ⟨TBD⟩          |
-| declined — answered in prose, no box                             | 0       | 0               | 2 answers     | ⟨TBD⟩          |
+| right element (centre inside it)                                 | 96.4%   | 91.3%           | 84.6%         | 81.8%          |
+| **wrong element** — centre inside a *different* labelled element | 1.2%    | 3.2%            | 8.5%          | 7.7%           |
+| near miss — overlaps the right element, centre just outside      | 2.2%    | 4.6%            | 4.6%          | 3.2%           |
+| empty space — centre on no labelled element                      | 0.2%    | 1.0%            | 2.3%          | 7.4%           |
+| declined — answered in prose, no box                             | 0       | 0               | 2 answers     | 0              |
 
 GPT-5.6 classifies its *label* boxes against the human's, as in the headline table — boxes drawn while describing the element, 
 not answers to a question — so its column is not on the same footing as the other three and reads high. 
 
-When Qwen is wrong it has mostly chosen another control; Opus is wrong less often and, when it is, as likely to have drawn a loose box around the right one. 
+When Qwen is wrong it has mostly chosen another control; 
+Opus is wrong less often and, when it is, as likely to have drawn a loose box around the right one. 
+GUI-Owl returned a bare click point for 8,840 of its 10,568 answers and a box for 1,728; when it misses, 
+it lands on empty space almost as often as on another control — a point has no extent to overlap the right element with, 
+so a near miss for it is rarer by construction. 
 
 This table is about elements that are on the screen, which is the locator's job: given a name, find it. The benchmark asks for a 
 box and nothing else, so *declined* counts a model breaking format rather than a considered "not there" — with this prompt, a model that 
@@ -112,9 +118,10 @@ The GPT-5.6 and GUI-Owl figures still come from the earlier cross-labelled runs 
 against the same labels — and will move to the human ground truth as those runs are repeated on it. 
 The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
 
-**Note:** GUI-Owl's centroid sitting above Qwen's is not a better score — it is an answer to a different question. 
-It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all. 
-A point has no area, so it scores zero on IoU by construction. If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on the same leaderboard:
+**Note:** GUI-Owl's centroid and its IoU are answers to two different questions. 
+It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all, and only 19.4% of the boxes it does return reach IoU ≥ 0.5. 
+A point has no area, so it scores zero on IoU by construction. 
+If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on the same leaderboard:
 ```
 iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
      2.93%    =     15.1%     ×        19.4%
