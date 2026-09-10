@@ -225,7 +225,9 @@ ollama run qwen2.5-vl
 python benchmark/run_vision_benchmark.py --base-url http://localhost:11434 --model qwen2.5-vl
 ```
 
-**llama.cpp**
+**llama.cpp** — requests are issued grouped by screenshot, so llama.cpp's prompt cache encodes each image once and 
+every further request about that screenshot costs a fraction of a second; with one slot this is what makes a 
+full run take hours rather than days.
 
 ```bash
 llama-server -m Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf --mmproj mmproj.gguf --ctx-size 16384
