@@ -112,31 +112,32 @@ asked-for box and the chosen one side by side. The worst cases of each kind, wit
 ### How much the wording matters
 
 Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
-The headline table shows `name`; this section is what the other two add. 
-The Opus and Qwen figures are on the human ground truth, over the same 10,568 elements as the headline table (Qwen on the production endpoint). 
-The GPT-5.6 and GUI-Owl figures still come from the earlier cross-labelled runs — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), GUI-Owl as a Q4_K_M GGUF on an Apple Silicon Mac mini
-against the same labels — and will move to the human ground truth as those runs are repeated on it. 
+The headline table shows `name`; this section is what the other two add.
+
+The Opus, Qwen and GUI-Owl figures are on the human ground truth, over the same 10,568 elements as the headline table. 
+The GPT-5.6 column comes from the earlier cross-labelled run — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`) — and would move to the human ground truth if that run were repeated on it. 
 The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
 
 **Note:** GUI-Owl's centroid and its IoU are answers to two different questions. 
-It is an agentic model trained to emit a click point `(x, y)`, so 84.9% of its answers carry no box at all, and only 19.4% of the boxes it does return reach IoU ≥ 0.5. 
+It is an agentic model trained to emit a click point `(x, y)`, so 84.6% of its answers carry no box at all, and only 17.9% of the boxes it does return reach IoU ≥ 0.5. 
 A point has no area, so it scores zero on IoU by construction. 
 If what you need is a bounding box, coverage is a **gate**, not a metric, and those two are not on the same leaderboard:
 ```
 iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
-     2.93%    =     15.1%     ×        19.4%
+     2.75%    =     15.4%     ×        17.9%
 ```
 
 Asked the same element three ways, every model moves more than the gap between models:
 
 | Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8  | Qwen2.5-VL | GUI-Owl    |
 |----------------------------|------------------------------------------------------------|------------|-----------|------------|------------|
-| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 84.60%     | 85.79%     |
-| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **90.17%** | **90.34%** |
-| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 83.19%     | 87.28%     |
+| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 84.60%     | 81.76%     |
+| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **90.17%** | **87.31%** |
+| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 83.19%     | 84.63%     |
 
 All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. 
-Three of the four then find `intent` hardest; GUI-Owl is the exception, and finds `name` hardest.
+The hardest phrasing splits two and two: GPT-5.6 and Qwen on `intent`, Opus and GUI-Owl on `name` — 
+Opus by a hair (91.26% against 91.29%), GUI-Owl by three points.
 
 A single-phrasing headline flatters a model, because `name` is usually the element's visible text and `intent` deliberately 
 carries no text handle at all. 
@@ -152,10 +153,10 @@ Measured per element:
 | GPT-5.6                  | 95.62%          | **92.48%**                |
 | Claude Opus 4.8          | 91.97%          | **87.07%**                |
 | Qwen2.5-VL-7B-Instruct   | 85.99%          | **75.58%**                |
-| GUI-Owl-1.5-8B-Instruct  | 87.80%          | **77.62%**                |
+| GUI-Owl-1.5-8B-Instruct  | 84.57%          | **72.30%**                |
 
-So the figure to plan reliability against is three points below the headline for the strongest model here and
-about ten for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
+So the figure to plan reliability against is three points below the headline for the strongest model here, five for Opus, and
+ten to twelve for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
 (`summary.agreement` in every multi-phrasing result file carries these counts.)
 
 Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 

@@ -1,0 +1,295 @@
+{
+  "model": "gui-owl-1.5-8b",
+  "served_model": "gui-owl-1.5-8b",
+  "stopped_early": false,
+  "date": "2026-09-10T16:27:06.256604+00:00",
+  "description_indices": [
+    0,
+    1,
+    2
+  ],
+  "metric": "centroid",
+  "max_image_dim": 0,
+  "coord_grid": 1000,
+  "prompt_style": "normalized",
+  "max_tokens": 2048,
+  "workers": 2,
+  "temperature": 0,
+  "temperature_dropped": false,
+  "thinking_budget": -1,
+  "summary": {
+    "total_elements": 35742,
+    "unique_elements": 11914,
+    "selected_elements": 35742,
+    "completed_fraction": 1.0,
+    "metric": "centroid",
+    "primary_accuracy": 0.8345,
+    "iou_pass_count": 1057,
+    "iou_fail_count": 34685,
+    "iou_accuracy": 0.0296,
+    "mean_iou": 0.2819,
+    "median_iou": 0.2373,
+    "iou_threshold": 0.5,
+    "centroid_pass_count": 29825,
+    "centroid_accuracy": 0.8345,
+    "point_only_count": 30017,
+    "bbox_count": 5725,
+    "bbox_coverage": 0.1602,
+    "iou_accuracy_given_bbox": 0.1846,
+    "clamped_pred_count": 343,
+    "scale_check": {
+      "predictions": 35742,
+      "pred_median_cx": 0.499,
+      "pred_median_cy": 0.625,
+      "gt_median_cx": 0.5,
+      "gt_median_cy": 0.6374,
+      "x_ratio": 0.998,
+      "y_ratio": 0.9805,
+      "axes_disagree": false,
+      "suspect": false
+    },
+    "offset_check": {
+      "predictions": 35742,
+      "median_dx": -0.0054,
+      "median_dy": -0.0026,
+      "median_abs_dx": 0.0081,
+      "median_abs_dy": 0.0043,
+      "boxes": 5725,
+      "median_width_ratio": 0.7602,
+      "median_height_ratio": 0.9499
+    },
+    "by_description": {
+      "0": {
+        "style": "name",
+        "total": 11914,
+        "primary_accuracy": 0.8072,
+        "centroid_pass_count": 9617,
+        "centroid_accuracy": 0.8072,
+        "iou_pass_count": 273,
+        "iou_accuracy": 0.0229,
+        "mean_iou": 0.2488,
+        "median_iou": 0.2165,
+        "avg_input_tokens": 2741.9,
+        "avg_output_tokens": 13.2,
+        "avg_latency_ms": 49108.1,
+        "error_count": 0
+      },
+      "1": {
+        "style": "label",
+        "total": 11914,
+        "primary_accuracy": 0.8665,
+        "centroid_pass_count": 10324,
+        "centroid_accuracy": 0.8665,
+        "iou_pass_count": 586,
+        "iou_accuracy": 0.0492,
+        "mean_iou": 0.3421,
+        "median_iou": 0.2752,
+        "avg_input_tokens": 2746.2,
+        "avg_output_tokens": 13.3,
+        "avg_latency_ms": 2677.8,
+        "error_count": 0
+      },
+      "2": {
+        "style": "intent",
+        "total": 11914,
+        "primary_accuracy": 0.8296,
+        "centroid_pass_count": 9884,
+        "centroid_accuracy": 0.8296,
+        "iou_pass_count": 198,
+        "iou_accuracy": 0.0166,
+        "mean_iou": 0.2382,
+        "median_iou": 0.2033,
+        "avg_input_tokens": 2749.2,
+        "avg_output_tokens": 12.7,
+        "avg_latency_ms": 2677.2,
+        "error_count": 0
+      }
+    },
+    "agreement": {
+      "phrasings": 3,
+      "scored_elements": 11914,
+      "any_pass_count": 11154,
+      "any_accuracy": 0.9362,
+      "all_pass_count": 8432,
+      "all_accuracy": 0.7077,
+      "mixed_count": 2722
+    },
+    "by_source": {
+      "gpt": {
+        "total": 31704,
+        "elements": 10568,
+        "answer_classes": {
+          "right_element": {
+            "count": 26811,
+            "share": 0.8457
+          },
+          "other_element": {
+            "count": 1899,
+            "share": 0.0599
+          },
+          "near_miss": {
+            "count": 893,
+            "share": 0.0282
+          },
+          "empty_space": {
+            "count": 2101,
+            "share": 0.0663
+          },
+          "declined": {
+            "count": 0,
+            "share": 0.0
+          },
+          "non_answer": {
+            "count": 0,
+            "share": 0.0
+          }
+        },
+        "centroid_pass_count": 26811,
+        "centroid_accuracy": 0.8457,
+        "iou_pass_count": 872,
+        "iou_accuracy": 0.0275,
+        "mean_iou": 0.2799,
+        "median_iou": 0.2368,
+        "bbox_coverage": 0.1538,
+        "error_count": 0,
+        "by_description": {
+          "0": {
+            "style": "name",
+            "total": 10568,
+            "centroid_accuracy": 0.8176,
+            "iou_accuracy": 0.0214,
+            "median_iou": 0.216
+          },
+          "1": {
+            "style": "label",
+            "total": 10568,
+            "centroid_accuracy": 0.8731,
+            "iou_accuracy": 0.0464,
+            "median_iou": 0.2717
+          },
+          "2": {
+            "style": "intent",
+            "total": 10568,
+            "centroid_accuracy": 0.8463,
+            "iou_accuracy": 0.0148,
+            "median_iou": 0.2118
+          }
+        },
+        "agreement": {
+          "scored_elements": 10568,
+          "any_accuracy": 0.9419,
+          "all_accuracy": 0.723,
+          "mixed_count": 2313
+        }
+      },
+      "opus": {
+        "total": 4038,
+        "elements": 1346,
+        "answer_classes": {
+          "right_element": {
+            "count": 3014,
+            "share": 0.7464
+          },
+          "other_element": {
+            "count": 487,
+            "share": 0.1206
+          },
+          "near_miss": {
+            "count": 143,
+            "share": 0.0354
+          },
+          "empty_space": {
+            "count": 394,
+            "share": 0.0976
+          },
+          "declined": {
+            "count": 0,
+            "share": 0.0
+          },
+          "non_answer": {
+            "count": 0,
+            "share": 0.0
+          }
+        },
+        "centroid_pass_count": 3014,
+        "centroid_accuracy": 0.7464,
+        "iou_pass_count": 185,
+        "iou_accuracy": 0.0458,
+        "mean_iou": 0.2937,
+        "median_iou": 0.2434,
+        "bbox_coverage": 0.2105,
+        "error_count": 0,
+        "by_description": {
+          "0": {
+            "style": "name",
+            "total": 1346,
+            "centroid_accuracy": 0.7259,
+            "iou_accuracy": 0.0349,
+            "median_iou": 0.2225
+          },
+          "1": {
+            "style": "label",
+            "total": 1346,
+            "centroid_accuracy": 0.815,
+            "iou_accuracy": 0.0713,
+            "median_iou": 0.2946
+          },
+          "2": {
+            "style": "intent",
+            "total": 1346,
+            "centroid_accuracy": 0.6984,
+            "iou_accuracy": 0.0312,
+            "median_iou": 0.1505
+          }
+        },
+        "agreement": {
+          "scored_elements": 1346,
+          "any_accuracy": 0.8915,
+          "all_accuracy": 0.5877,
+          "mixed_count": 409
+        }
+      }
+    },
+    "answer_classes": {
+      "right_element": {
+        "count": 29825,
+        "share": 0.8345
+      },
+      "other_element": {
+        "count": 2386,
+        "share": 0.0668
+      },
+      "near_miss": {
+        "count": 1036,
+        "share": 0.029
+      },
+      "empty_space": {
+        "count": 2495,
+        "share": 0.0698
+      },
+      "declined": {
+        "count": 0,
+        "share": 0.0
+      },
+      "non_answer": {
+        "count": 0,
+        "share": 0.0
+      }
+    },
+    "total_input_tokens": 98139381,
+    "total_output_tokens": 468283,
+    "avg_input_tokens": 2745.8,
+    "avg_output_tokens": 13.1,
+    "total_cached_input_tokens": 73301138,
+    "cached_input_fraction": 0.7469,
+    "p95_output_tokens": 25,
+    "elements_with_token_counts": 35742,
+    "error_count": 0,
+    "timeout_count": 0,
+    "avg_latency_ms": 18154.4,
+    "p50_latency_ms": 1438.8,
+    "p95_latency_ms": 66998.7
+  },
+  "dataset_path": "data/dataset-v1-human.jsonl",
+  "note": "Scored against the human-adjudicated ground truth (data/dataset-v1-human.jsonl, 11,914 elements), all three phrasings, 35,742 requests, 0 errors. Endpoint: llama.cpp serving the Q4_K_M GGUF on an Apple Silicon Mac mini, one slot. Asked for floats in [0,1], answering on its 0-1000 grid (coord_grid 1000). The name-phrasing rows are the 7 Sep 2026 run carried forward by checkpoint; label and intent were added on 10 Sep with requests grouped by screenshot. ~84% of answers are a bare click point, so IoU is over the ~16% that returned a box; centroid is the figure to read. summary.by_source.gpt is the 10,568-element set shared with the other rows (the README headline); .opus the 1,346 elements only Opus found."
+}
