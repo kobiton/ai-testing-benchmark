@@ -1,6 +1,6 @@
 # AI Testing Benchmark
 
-**Can a vision model find a UI element from a plain-English description?**
+**Can a model find a UI element from a plain-English description using the screenshot, the screen's accessibility tree, or tree first with the screenshot as the fallback?**
 
 If it can, UI tests may not need brittle selectors like:
 
@@ -8,23 +8,26 @@ If it can, UI tests may not need brittle selectors like:
 findElement(By.xpath("//android.widget.Button[@resource-id='btn_scan_qr']"))
 ```
 
-Instead, a test could describe what it wants:
+Instead, a test can describe the target element in plain English:
 
 ```java
 findElement(byDescription("the scan QR code button"))   // illustrative
 ```
 
-and let a vision model locate the element on screen.
+and let a model locate it, either visually from the screenshot or structurally from the page source.
 
-This repository benchmarks exactly that — and the other way a natural-language locator can work: 
-hand a text model the screen's accessibility tree instead of the screenshot and ask for the XPath.
-Both strategies are scored on the same elements, the same descriptions and the same ground truth,
-and a third scorer joins them into the cascade a locator would actually run: tree first, screenshot only when the tree gives nothing.
+This repository benchmarks both, and the combination a locator would actually run. 
+The **screenshot track** shows a vision model the screen and one description and asks for a box. 
+The **tree track** shows a text model the filtered accessibility tree and the same description and asks for one XPath or `NOT_FOUND`;
+the XPath is run on the tree and the node it selects is the answer. 
+A third scorer joins the two into the **cascade**: tree first, screenshot only where the tree gave nothing. 
+All three are scored on the same elements, the same descriptions and the same ground truth.
 
-It contains **841 real Android screenshots and 10,307 ground-truth UI elements**, each described in three different ways. 
+It contains **841 real Android screenshots**, each with its page source, labeled three times - by two frontier models independently 
+and by a human adjudicating between them, and **10,568 human-verified elements** in the benchmark population, each described in three different ways. 
 The runner works with any **OpenAI-compatible endpoint**, including vLLM, llama.cpp, Ollama, and hosted APIs.
 
-It exists because we needed to choose a self-hosted model and wanted a benchmark tailored to the question we actually needed to answer. 
+It exists because we needed to choose a self-hosted model and a locator strategy, and wanted a benchmark tailored to the question we actually needed to answer. 
 Published so you can check our numbers and score your own model on the same corpus.
 
 ---
@@ -34,14 +37,34 @@ Published so you can check our numbers and score your own model on the same corp
 **Scored against the human-adjudicated ground truth** (`data/dataset-v1-human.jsonl`): an independent human annotator 
 settled every element the two frontier labellings disagreed on and verified the ones they agreed on 
 (how it was built is under [The dataset](#the-dataset)). 
-Every row is over the same **10,568 elements** — the ones GPT-5.6 described, which every model here has an answer for.
+Every figure below is over the same **10,568 elements** - the ones GPT-5.6 described, which every model here has an answer for - 
+under the `name` phrasing unless a table says otherwise.
 
-|                             | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU  | returned a box | asked for |
-|-----------------------------|------------------------------|-------------------------|-------------|---------------|----------|
-| **GPT-5.6**                 | **96.4%**                    | **89.7%**               | 0.963       | 100%          | pixels   |
-| **Claude Opus 4.8**         | 91.3%                        | 61.2%                   | 0.617       | 100%          | pixels   |
-| **Qwen2.5-VL-7B-Instruct**  | 84.6%                        | 55.4%                   | 0.553       | 99.98%        | pixels   |
-| **GUI-Owl-1.5-8B-Instruct** | 81.8%                        | 2.1%                    | 0.216       | 16.4%         | floats   |
+### At a glance
+
+Three ways to locate the same element, two models that were measured under all three. 
+Correct means that the center of the returned box, or of the node selected by the XPath, falls within the human-annotated box for that element.
+
+|                     | Screenshot alone          | Tree alone | Tree first, screenshot as the fallback |
+|---------------------|---------------------------|------------|----------------------------------------|
+| **GPT-5.6**         | 96.4% (label boxes)¹      | 58.1%      | 89.2%                                  |
+| **Claude Opus 4.8** | 91.3%                     | 57.2%      | 86.8%                                  |
+
+¹ GPT-5.6 co-authored this corpus, so its screenshot figure scores the *label* boxes it drew while describing the elements, not answers to a question, so read it as label quality.
+Its tree and cascade figures are benchmark answers like Opus's.
+
+Tree alone and the cascade are not the same measurement as the screenshot alone, and the gap between the columns is the point:
+a third of the elements have no node the tree can name (the keyboard, and interfaces drawn without a tree - see [On the accessibility tree](#on-the-accessibility-tree)),
+and a wrong XPath is final, the fallback never fires on it. The three subsections below give each column in full.
+
+### From the screenshot
+
+|                             | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU | returned a box | asked for |
+|-----------------------------|------------------------------|-------------------------|------------|----------------|-----------|
+| **GPT-5.6**                 | **96.4%**                    | **89.7%**               | 0.963      | 100%           | pixels    |
+| **Claude Opus 4.8**         | 91.3%                        | 61.2%                   | 0.617      | 100%           | pixels    |
+| **Qwen2.5-VL-7B-Instruct**  | 84.6%                        | 55.4%                   | 0.553      | 99.98%         | pixels    |
+| **GUI-Owl-1.5-8B-Instruct** | 81.8%                        | 2.1%                    | 0.216      | 16.4%          | floats    |
 
 The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by 
 adjudicating between those very boxes — so read it as label quality, not a benchmark answer. 
@@ -79,10 +102,116 @@ What the human adjudication itself found, in one pass over every kind of disagre
 **[Browse every row screenshot by screenshot →](https://dataset-review-ui-test.kobiton.com/compare)**
 the ground-truth boxes and the model's side by side over each screenshot, every prediction tagged with its IoU and colour-coded by band, and a per-element list with the IoU and centroid verdicts.
 
+### From the accessibility tree
+
+The same 10,568 elements, the same three phrasings, no image: the filtered page source and one description go to the model,
+one XPath or `NOT_FOUND` comes back, the XPath is run on the full tree and the first node it selects is graded by the same
+centroid rule. Over all three phrasings — 31,704 requests per model, percentages of that total:
+
+|                                              |        GPT-5.6 | Claude Opus 4.8 |
+|----------------------------------------------|----------------|-----------------|
+| answered, right element                      | 58.1% (18,433) |  57.2% (18,125) |
+| answered, wrong element                      |  10.5% (3,327) |    9.5% (2,999) |
+| not answered                                 |  31.4% (9,944) |  33.4% (10,580) |
+| ↳ of which `NOT_FOUND`                       |          9,637 |          10,251 |
+| ↳ of which the XPath did not compile         |              3 |              46 |
+| ↳ of which the XPath matched no node         |            304 |             283 |
+| right among the answered                     |          84.7% |           85.8% |
+| elements right under **all three** phrasings |          54.6% |           52.9% |
+
+Two models that are seven points apart on the screenshot are within a point of each other on the tree, in every row. 
+On this input the ceiling is the data's, not the model's:
+
+- **A third of the requests get no answer, and half of those are the keyboard.** 5,060 of the 31,704 requests describe a key on
+  the on-screen keyboard; the page source holds the application window only, so no such node exists, and both models say
+  `NOT_FOUND` on ~96% of them. Excluding those rows, *not answered* is 19.2% for GPT-5.6 and 21.3% for Opus over the remaining
+  26,644. The rest are interfaces drawn without a usable tree, such as one container for a whole screen, links inside a text run -
+  which no prompt can fix.
+- **When the tree does name the element, the model is right about 85% of the time**, and the ~10% it gets wrong is the part no fallback recovers: see the cascade.
+- The phrasing barely moves the right-answer rate (57–58% under all three for both models); `intent` draws a few more wrong answers.
+
+Every row's `xml_outcome` and the per-file counts (`summary.xml_outcomes`) are in the result files;
+[On the accessibility tree](#on-the-accessibility-tree) explains what each outcome means and how the prompt is handled.
+
+### Tree first, screenshot as the fallback
+
+A locator in the field would try the tree first and show the model the screenshot only when the tree yields nothing.
+No new request is needed to measure that: the two tracks above are joined per (element, phrasing) by `benchmark/score_cascade.py`.
+Every request falls into exactly one of lines 1, 2, 4, 5 or 6; lines 3, 7 and 8 are sums. 
+Over all three phrasings, 31,704 requests per model, percentages of that total:
+
+| # |                                              |            GPT-5.6 |    Claude Opus 4.8 |
+|---|----------------------------------------------|--------------------|--------------------|
+| 1 | tree answered correctly                      |     58.1% (18,433) |     57.2% (18,125) |
+| 2 | tree answered incorrectly                    |      10.5% (3,327) |       9.5% (2,999) |
+| 3 | tree did not answer → sent to the screenshot |      31.4% (9,944) |     33.4% (10,580) |
+| 4 | screenshot answered correctly                |      30.5% (9,675) |      30.2% (9,575) |
+| 5 | screenshot answered incorrectly              |         0.9% (269) |       3.2% (1,005) |
+| 6 | screenshot did not answer                    |             0% (0) |             0% (0) |
+| 7 | **correct overall** (1 + 4)                  | **88.7% (28,108)** | **87.4% (27,700)** |
+| 8 | **incorrect overall** (2 + 5 + 6)            |      11.3% (3,596) |      12.6% (4,004) |
+
+By phrasing, line 7 is 89.2% / 90.5% / 86.3% for GPT-5.6 and 86.8% / 89.4% / 85.9% for Opus (`name` / `label` / `intent`):
+the same ordering as on the screenshot. All eight lines per phrasing are in the details block at the end of this section.
+
+How to read it:
+
+- **A wrong XPath is final.** The fallback fires on *not answered*, never on *answered wrongly*, so line 2 is lost for good and
+  the cascade can score below the screenshot alone. It does here: Opus's screenshot answers alone are right on 92.0% of
+  these same 31,704 requests, the cascade on 87.4% — the 9.5% lost in line 2 outweighs the 3.2% the screenshot gets wrong
+  in line 5.
+- **The screenshot half was asked only where the tree gave nothing**, for both models, and graded by the same centroid rule
+  as the screenshot table above (`pixels` prompt). On those rows the screenshot is right 97.3% of the time for GPT-5.6 and
+  90.5% for Opus - the rows the tree could not name are not hard for a vision model.
+- **Line 6 is 0 by construction, and that is the right reading for this dataset.** Every element the cascade asks about is
+  on the screen, so it is in the human ground truth; "not found" is never the correct answer here, and letting the model
+  decline could only turn a request in line 4 or 5 into a miss. The screenshot prompt therefore allows no "not found"
+  answer, and line 6 holds only parse failures and transport errors; both runs had none. What a model does when the element
+  is genuinely absent is a different question, and needs its own set of absent-element queries to measure.
+- **The keyboard sits in line 3.** The ~4,850 keyboard requests each model could not answer from the tree all go to the
+  screenshot, where a vision model handles them like any other control. The cascade therefore recovers the data gap, and
+  lines 4–5 should be read with that in mind.
+
+The sublines of 3 and 6 and the JSON behind the table are in [`reference-results/`](reference-results/) and described in
+[`benchmark/README.md`](benchmark/README.md#score_cascadepy--tree-first-screenshot-as-the-fallback).
+
+<details>
+<summary><b>Details of the same eight lines per description phrasing</b></summary>
+
+Each phrasing is 10,568 requests; the "all" column is the table above.
+
+**GPT-5.6**
+
+| # |                                              | all 3 phrasings (31,704) |     name (10,568) |    label (10,568) |   intent (10,568) |
+|---|----------------------------------------------|--------------------------|-------------------|-------------------|-------------------|
+| 1 | tree answered correctly                      |           58.1% (18,433) |     58.1% (6,145) |     58.4% (6,170) |     57.9% (6,118) |
+| 2 | tree answered incorrectly                    |            10.5% (3,327) |     10.0% (1,054) |        8.6% (911) |     12.9% (1,362) |
+| 3 | tree did not answer → sent to the screenshot |            31.4% (9,944) |     31.9% (3,369) |     33.0% (3,487) |     29.2% (3,088) |
+| 4 | screenshot answered correctly                |            30.5% (9,675) |     31.0% (3,279) |     32.1% (3,397) |     28.4% (2,999) |
+| 5 | screenshot answered incorrectly              |               0.9% (269) |         0.9% (90) |         0.9% (90) |         0.8% (89) |
+| 6 | screenshot did not answer                    |                 0.0% (0) |          0.0% (0) |          0.0% (0) |          0.0% (0) |
+| 7 | **correct overall** (1 + 4)                  |       **88.7% (28,108)** | **89.2% (9,424)** | **90.5% (9,567)** | **86.3% (9,117)** |
+| 8 | **incorrect overall** (2 + 5 + 6)            |            11.3% (3,596) |     10.8% (1,144) |      9.5% (1,001) |     13.7% (1,451) |
+
+**Claude Opus 4.8**
+
+| # |                                              | all 3 phrasings (31,704) |     name (10,568) |    label (10,568) |   intent (10,568) |
+|---|----------------------------------------------|--------------------------|-------------------|-------------------|-------------------|
+| 1 | tree answered correctly                      |           57.2% (18,125) |     57.2% (6,041) |     57.2% (6,043) |     57.2% (6,041) |
+| 2 | tree answered incorrectly                    |             9.5% (2,999) |      9.5% (1,003) |        7.9% (836) |     11.0% (1,160) |
+| 3 | tree did not answer → sent to the screenshot |           33.4% (10,580) |     33.4% (3,524) |     34.9% (3,689) |     31.9% (3,367) |
+| 4 | screenshot answered correctly                |            30.2% (9,575) |     29.6% (3,129) |     32.2% (3,405) |     28.8% (3,041) |
+| 5 | screenshot answered incorrectly              |             3.2% (1,005) |        3.7% (395) |        2.7% (284) |        3.1% (326) |
+| 6 | screenshot did not answer                    |                 0.0% (0) |          0.0% (0) |          0.0% (0) |          0.0% (0) |
+| 7 | **correct overall** (1 + 4)                  |       **87.4% (27,700)** | **86.8% (9,170)** | **89.4% (9,448)** | **85.9% (9,082)** |
+| 8 | **incorrect overall** (2 + 5 + 6)            |            12.6% (4,004) |     13.2% (1,398) |     10.6% (1,120) |     14.1% (1,486) |
+
+</details>
+
 ### When it is wrong, what did it do?
 
 A failed answer is not one thing. Judged from the centre of the returned box against every human-drawn element on the same screen, 
-over the same 10,568 elements and the `name` phrasing as the headline table:
+over the same 10,568 elements and the `name` phrasing as the screenshot table:
 
 |                                                                  | GPT-5.6 | Claude Opus 4.8 | Qwen2.5-VL-7B | GUI-Owl-1.5-8B |
 |------------------------------------------------------------------|---------|-----------------|---------------|----------------|
@@ -92,7 +221,7 @@ over the same 10,568 elements and the `name` phrasing as the headline table:
 | empty space — centre on no labelled element                      | 0.2%    | 1.0%            | 2.3%          | 7.4%           |
 | declined — answered in prose, no box                             | 0       | 0               | 2 answers     | 0              |
 
-GPT-5.6 classifies its *label* boxes against the human's, as in the headline table — boxes drawn while describing the element, 
+GPT-5.6 classifies its *label* boxes against the human's, as in the screenshot table - boxes drawn while describing the element, 
 not answers to a question — so its column is not on the same footing as the other three and reads high. 
 
 When Qwen is wrong it has mostly chosen another control; 
@@ -105,7 +234,9 @@ This table is about elements that are on the screen, which is the locator's job:
 box and nothing else, so *declined* counts a model breaking format rather than a considered "not there" — with this prompt, a model that 
 cannot find the element still has to guess, and the guess lands in one of the rows above. The complementary question, whether a model 
 says "not found" when the element is genuinely absent, is a separate measurement with its own set of absent-element queries; the 
-annotator's [92 flagged elements](reference-results/flagged-by-annotator.md) are its starting point. 
+annotator's [92 flagged elements](reference-results/flagged-by-annotator.md) are its starting point. The tree track is the one place
+this benchmark does let a model decline; `NOT_FOUND` is an invited answer there, which is why it's *not answered* line is the
+model's own call rather than a format slip.
 
 Every result file carries the class per row (`answer_class`, with the id of the element chosen instead) and the counts (`summary.answer_classes`), and the 
 [viewer](https://dataset-review-ui-test.kobiton.com/compare) filters on them — pick *Wrong element* and each screenshot shows the 
@@ -115,10 +246,10 @@ asked-for box and the chosen one side by side. The worst cases of each kind, wit
 ### How much the wording matters
 
 Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
-The headline table shows `name`; this section is what the other two add.
+The screenshot table shows `name`; this section is what the other two add.
 
-The Opus, Qwen and GUI-Owl figures are on the human ground truth, over the same 10,568 elements as the headline table. 
-The GPT-5.6 column comes from the earlier cross-labelled run — GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`) — and would move to the human ground truth if that run were repeated on it. 
+The Opus, Qwen and GUI-Owl figures are on the human ground truth, over the same 10,568 elements as the screenshot table. 
+The GPT-5.6 column comes from the earlier cross-labelled run - GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), and would move to the human ground truth if that run were repeated on it. 
 The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
 
 **Note:** GUI-Owl's centroid and its IoU are answers to two different questions. 
@@ -132,15 +263,19 @@ iou_accuracy = bbox_coverage × iou_accuracy_given_bbox
 
 Asked the same element three ways, every model moves more than the gap between models:
 
-| Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8  | Qwen2.5-VL | GUI-Owl    |
-|----------------------------|------------------------------------------------------------|------------|-----------|------------|------------|
-| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%    | 84.60%     | 81.76%     |
+| Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8   | Qwen2.5-VL | GUI-Owl    |
+|----------------------------|------------------------------------------------------------|------------|------------|------------|------------|
+| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%     | 84.60%     | 81.76%     |
 | `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **90.17%** | **87.31%** |
-| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%    | 83.19%     | 84.63%     |
+| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%     | 83.19%     | 84.63%     |
 
-All four find `label` easiest — it is the phrasing that repeats the element's visible text most often. 
-The hardest phrasing splits two and two: GPT-5.6 and Qwen on `intent`, Opus and GUI-Owl on `name` — 
+All four find `label` easiest, it is the phrasing that repeats the element's visible text most often. 
+The hardest phrasing splits two and two: GPT-5.6 and Qwen on `intent`, Opus and GUI-Owl on `name` - 
 Opus by a hair (91.26% against 91.29%), GUI-Owl by three points.
+
+On the tree the wording hardly matters to the right-answer rate - 57–58% under every phrasing for both models, because
+what decides a tree request is whether the element has a node at all, not how it was described. What moves is the wrong-answer
+rate: `intent`, the phrasing with no text handle, draws 12.9% wrong from GPT-5.6 against 8.6% under `label`.
 
 A single-phrasing headline flatters a model, because `name` is usually the element's visible text and `intent` deliberately 
 carries no text handle at all. 
@@ -149,52 +284,27 @@ Scoring all three is what makes the figure describe the ways a tester might actu
 **And the average still flatters it.** 
 Averaging the three counts an element as 2-of-3 correct; 
 what a test suite needs is the element working *whatever* the tester typed. 
-Measured per element:
+Measured per element, on the screenshot:
 
-|                          | average centroid | passes under **all three** |
-|--------------------------|-----------------|---------------------------|
-| GPT-5.6                  | 95.62%          | **92.48%**                |
-| Claude Opus 4.8          | 91.97%          | **87.07%**                |
-| Qwen2.5-VL-7B-Instruct   | 85.99%          | **75.58%**                |
-| GUI-Owl-1.5-8B-Instruct  | 84.57%          | **72.30%**                |
+|                         | average centroid | passes under **all three** |
+|-------------------------|------------------|----------------------------|
+| GPT-5.6                 | 95.62%           | **92.48%**                 |
+| Claude Opus 4.8         | 91.97%           | **87.07%**                 |
+| Qwen2.5-VL-7B-Instruct  | 85.99%           | **75.58%**                 |
+| GUI-Owl-1.5-8B-Instruct | 84.57%           | **72.30%**                 |
 
 So the figure to plan reliability against is three points below the headline for the strongest model here, five for Opus, and
 ten to twelve for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
-(`summary.agreement` in every multi-phrasing result file carries these counts.)
+(`summary.agreement` in every multi-phrasing result file carries these counts; on the tree it is 54.6% and 52.9%, in the table above.)
 
 Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 
 Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
-
-### Tree first, screenshot as the fallback
-
-The screenshot is not the only thing a locator can show a model. The page source - the accessibility tree UiAutomator dumps,
-one `<screenshot_id>.xml` per screenshot under [`data/xml/`](data/xml/). It can be filtered and sent as text, and the model asked for **one XPath or `NOT_FOUND`**.
-The XPath is run on the full tree, the first node's `bounds` become the predicted box, and the same centroid rule applies. 
-`--input xml` is that track; it needs no vision model at all. 
-The instructions the model reads are a text file (`--xml-prompt`). The one our reference figures were measured with ships 
-inside a product and is not in this repository, so the default here is a shorter prompt of the same shape, and a run with it 
-will differ from the published `xml-…` numbers by the prompt rather than by the harness. Every result records the prompt's name and hash.
-
-A locator in the field would try the tree first and fall back to the screenshot only when the tree yields nothing, so the two tracks are joined into that cascade by `benchmark/score_cascade.py`,
-with no new request: XML correct / incorrect / not answered; on the not-answered rows, vision correct / incorrect / not answered; then the two totals. 
-The rule has one consequence worth knowing before reading any number: a *wrong* XPath is final — the fallback fires on "not answered", never on "answered wrongly",
-so the cascade can come out below the screenshot strategy on its own.
-
-Two facts about the data shape every XML figure. The dumps hold the application window only, where a tree read on a device also holds the keyboard,
-so the ~1,700 elements that are keys on the on-screen keyboard come back `NOT_FOUND` for a reason that is the data's, not the model's; 
-the scorer counts them as a footnote rather than removing them.
-And the vision prompt here allows no "not found" answer, so the cascade's "vision not answered" line holds only parse failures and errors.
-
-<!-- TODO: table of the eight cascade figures for GPT-5.6 and Claude Opus 4.8 over the 10,568 gpt- elements of the human ground truth, from reference-results/cascade-*.json, once the two full XML runs and the GPT-5.6 --only-from vision run have finished. -->
-
-How the track works, request by request, and what every `xml_outcome` means:
-[`benchmark/README.md`](benchmark/README.md#--input-xml--the-xml-track).
 
 ---
 
 ## Quickstart
 
-Python 3.9+, and an OpenAI-compatible endpoint serving a vision model.
+Python 3.9+, and an OpenAI-compatible endpoint serving a model: a vision model for the screenshot track, any text model for the tree track.
 
 ```bash
 git clone https://github.com/kobiton/ai-testing-benchmark.git
@@ -228,18 +338,30 @@ python benchmark/run_vision_benchmark.py \
     --description-index 0 1 2
 ```
 
-The same command with `--input xml` scores the tree strategy instead — no image is sent, so any text model will do — and writes `xml-<model>-…` rather than `vision-<model>-…`:
+The same command with `--input xml` scores the tree track instead — no image is sent, so any text model will do — and writes`xml-<model>-…` rather than `vision-<model>-…`:
 
 ```bash
 python benchmark/run_vision_benchmark.py --input xml \
     --base-url http://localhost:8000 \
     --model qwen2.5-vl \
-    --limit 200
+    --description-index 0 1 2
 ```
 
-Output lands in `benchmark-results/vision-<model>-GT-<dataset>-<timestamp>.json`. 
-Anything that makes a number mean something narrower — a `--limit` pilot, a stopped run, an endpoint that answered as a different model — 
-is marked in the filename too; [`benchmark/README.md`](benchmark/README.md) lists them.
+With one file of each kind for the same model, the cascade is a join and costs nothing. `--only-from` buys the screenshot
+answers the cascade needs and no others — the rows the tree did not answer — for a model that has no full screenshot run:
+
+```bash
+python benchmark/run_vision_benchmark.py --base-url http://localhost:8000 --model qwen2.5-vl \
+    --description-index 0 1 2 --only-from benchmark-results/xml-qwen2.5-vl-3phrasing-GT-v1-….json
+
+python benchmark/score_cascade.py \
+    benchmark-results/xml-qwen2.5-vl-3phrasing-GT-v1-….json \
+    benchmark-results/vision-qwen2.5-vl-3phrasing-ONLY-FROM-xml-GT-v1-….json
+```
+
+Output lands in `benchmark-results/<vision|xml>-<model>-GT-<dataset>-<timestamp>.json`. 
+Anything that makes a number mean something narrower — a `--limit` pilot, a stopped run, an endpoint that answered as a different model, 
+a screenshot run restricted to the tree's leftovers — is marked in the filename too; [`benchmark/README.md`](benchmark/README.md) lists them.
 
 ---
 
@@ -290,6 +412,12 @@ python benchmark/run_vision_benchmark.py --api-flavor anthropic \
 > at ~3,500 tokens each. `--limit 200` is deterministic and evenly spread, so the pilot and the
 > full run are comparable.
 
+> **Paid endpoints.** `--rpm` caps request starts per minute across all workers and `--max-requests`
+> caps one invocation's model calls, so a full run can stay under an account's per-minute limit and be
+> spread overnights under its spend limit; a capped run resumes with the same command. On the tree
+> track the shared prefix - the instructions and the tree are sent so both OpenAI's and Anthropic's
+> prompt caches pick it up, and cache writes and reads are recorded per run.
+
 > **Context size.** A 1080×2400 screenshot is ~3,300 image tokens on a patch-based vision model,
 > which overflows a 4,096-token context on its own. `the request exceeds the available context
 > size` comes from the server, not from this script — raise `--ctx-size` / `--max-model-len`.
@@ -312,13 +440,13 @@ One row per element, coordinates normalised to [0, 1]:
 Same schema, same `screenshot_id`s, same images — so any file works as `--dataset`, 
 and scoring one model against the *other* model's labels is what the cross-score in the results above is.
 
-|                    | `dataset-v1.jsonl`                         | `dataset-v1-gpt-5.6.jsonl` | `dataset-v1-human.jsonl` |
-|--------------------|--------------------------------------------|---------------------------|-------------------------|
-| Labelled by        | Claude Opus 4.8                            | GPT-5.6                   | a human annotator       |
-| Elements           | 10,314                                     | 10,647                    | 11,914                  |
-| With a bounding box | 10,307 (99.93%)                            | 10,647 (100%)             | 11,914 (100%)           |
-| Screenshots covered | 841                                        | 839                       | 841                     |
-| Descriptions       | 3 per element (`name` / `label` / `intent`) | same                      | same                    |
+|                     | `dataset-v1.jsonl`                          | `dataset-v1-gpt-5.6.jsonl` | `dataset-v1-human.jsonl` |
+|---------------------|---------------------------------------------|----------------------------|--------------------------|
+| Labelled by         | Claude Opus 4.8                             | GPT-5.6                    | a human annotator        |
+| Elements            | 10,314                                      | 10,647                     | 11,914                   |
+| With a bounding box | 10,307 (99.93%)                             | 10,647 (100%)              | 11,914 (100%)            |
+| Screenshots covered | 841                                         | 839                        | 841                      |
+| Descriptions        | 3 per element (`name` / `label` / `intent`) | same                       | same                     |
 
 The two model labellings disagree about *what an element is*, not only about where its box goes: 
 Opus found 10,314 and GPT-5.6 10,647 on the same screens, and there is **no shared element id to join on**. 
@@ -332,6 +460,19 @@ and 92 records the annotator flagged (55 *element not found*, 37 *description am
 One asymmetry to know: where the two models had matched the same element, the frame showed GPT's phrasings, 
 so on nested same-element-different-granularity pairs (the icon vs the row around it) the human was adjudicating GPT's description of it.
 
+A fourth file, `dataset-v1-human-gpt.jsonl`, is the human file's 10,568 `gpt-` elements on their own.
+The population every figure in [Results](#results) is over (`summary.by_source.gpt` of a run on the full file). 
+The tree-track and cascade reference results were run on it directly, so their filenames carry `-GT-v1-human-gpt-`.
+
+**Beside each screenshot sits its page source**: `data/xml/<screenshot_id>.xml`, the UiAutomator dump captured at the same moment, 841 of them. 
+It is what the tree track sends to the model and runs the returned XPath on. Two things about it shape every tree figure:
+
+- It covers the **application window only**. A tree read on a live device also holds the on-screen keyboard; here a key on the
+  keyboard has no node, so the ~1,700 elements that are keys (5,060 of the 31,704 requests) cannot be answered from the tree
+  by any model. The scorers count them in a footnote rather than removing them.
+- It is the tree **as captured**, not as filtered. The model sees a filtered copy; the XPath it returns is run on the full dump,
+  as a driver would run it on the live tree, which is also where a positional index can land on a different node than the one the model counted.
+
 Screenshots are 841 Android, 1080×2400 throughout, crawled from **public app-store packages**. 
 Every element was found, boxed and described by a frontier model, then spot-checked before the dataset was accepted.
 
@@ -341,15 +482,6 @@ which is what makes the centroid/IoU split legible.
 The human labelling is what turned that limitation from assumed into measured — 
 the label-quality numbers and what the adjudication found are the headline of [Results](#results).
 
-A fourth file, `dataset-v1-human-gpt.jsonl`, is the human file's 10,568 `gpt-` elements on their own — the population every
-figure in [Results](#results) is over (`summary.by_source.gpt` of a run on the full file). The XML-track and cascade reference
-results were run on it directly, so their filenames carry `-GT-v1-human-gpt-`.
-
-Beside each screenshot sits its **page source**: `data/xml/<screenshot_id>.xml`, the UiAutomator dump captured at the same
-moment, 841 of them. It is what `--input xml` sends to the model and runs the returned XPath on. It covers the application window
-only — the on-screen keyboard, which a tree read on a live device would include, is not in it — and the
-[XML track's notes](benchmark/README.md#--input-xml--the-xml-track) say what that does to the numbers.
-
 Everything is in the repository: all four `.jsonl` files, their stats sidecars, all 841 PNGs under `data/images/`, named
 `<screenshot_id>.png`, and the 841 dumps under `data/xml/`. 
 A clone is ~320 MB and is everything the benchmark needs; no separate download step required.
@@ -358,7 +490,9 @@ A clone is ~320 MB and is everything the benchmark needs; no separate download s
 
 ## What is being measured
 
-Two metrics, both always computed. `--metric` only picks which one is the headline.
+Two inputs, one scoring rule. Whether the answer is a box the model drew on the screenshot or the bounds of the node its
+XPath selected, it is graded against the human's box the same way, and two metrics are always computed. `--metric` only
+picks which one is the headline:
 
 | Metric       | Pass condition                                                    |         |
 |--------------|-------------------------------------------------------------------|---------|
@@ -372,23 +506,26 @@ Models tend to box the glyph, while our ground truth boxes the full control incl
 so an element that was located correctly can still fail IoU. 
 Centroid separates the two questions; IoU is carried as a secondary box-tightness figure, with the bias stated rather than corrected.
 
-**The benchmark prompt deliberately states no box convention at all.** 
-Loading the labeller's rules into it would coach models toward the labeller's answer and measure agreement with our annotator 
-rather than element localisation.
+### On the screenshot
 
-### Pixels, or a 0–1000 grid?
+The model is shown the screenshot and one description and asked for a bounding box, nothing else.
+**The prompt deliberately states no box convention at all.** 
+Loading the labeler's rules into it would coach models toward the labeler's answer and measure agreement with our annotator 
+rather than element localization. Three things about this input decide whether a number can be trusted, and each one cost us a run to learn.
+
+#### Pixels, or a 0–1000 grid?
 
 **Which coordinate scale a model answers on is a property of the model, and it cannot be recovered from a single answer.** 
 On a 1080×2400 screenshot `[67, 91]` is a legal pixel pair *and* a legal point on a 0–1000 grid, 
-and the two readings are 2.4× apart on the y axis. 
+and the two readings are 2.4× apart on the y-axis. 
 Qwen2.5-VL answers in the screenshot's own pixels; GUI-Owl answers on a 0–1000 grid.
 Reading the grid as pixels gave us this, on a run that looked perfectly clean — 
 30,921 rows, 4 errors, every answer short and well-formed:
 
 | GUI-Owl, same 30,921 answers | centroid   | IoU ≥ 0.5 |
-|------------------------------|------------|----------|
-| read as pixels               | **10.56%** | 0.95%    |
-| read on the 0–1000 grid      | **87.80%** | 2.93%    |
+|------------------------------|------------|-----------|
+| read as pixels               | **10.56%** | 0.95%     |
+| read on the 0–1000 grid      | **87.80%** | 2.93%     |
 
 So: **pilot 200 elements and read `summary.scale_check` before trusting anything.** 
 If it flags, find the model's convention from its model card, add it to `COORD_GRIDS` in `benchmark/scoring/coords.py`, 
@@ -396,7 +533,7 @@ and re-score the pilot with `--rescore` rather than paying for the run twice.
 `scale_check` flags and never corrects, and `suspect: false` means "no evidence here" rather than "correct" — 
 [`benchmark/README.md`](benchmark/README.md) explains why, and how the check's sensitivity depends on aspect ratio.
 
-### How you ask for the coordinates changes the score
+#### How you ask for the coordinates changes the score
 
 The other half of the same problem: the grid above is how a model's answer is *read*, and this is how it was *asked*. 
 `--prompt-style pixels`, the default, states the image size and asks for integer pixels. 
@@ -407,10 +544,10 @@ A model that ignores the instruction is unaffected — Qwen2.5-VL answers in pix
 but a model that *obeys* it can be ruined by it. 
 Over 200 elements × 3 phrasings, changing nothing else, one frontier model went from **7.79%** centroid to **90.33%**:
 
-| same 200 elements, same ground truth   | centroid  | IoU ≥ 0.5 | median `dy` |
-|----------------------------------------|-----------|-----------|------------|
-| `normalized` — floats, no image size   | 7.79%     | 2.27%     | +0.0816    |
-| `pixels` — integers, image size stated | **90.33%** | **61.67%** | +0.0004    |
+| same 200 elements, same ground truth   | centroid   | IoU ≥ 0.5  | median `dy` |
+|----------------------------------------|------------|------------|-------------|
+| `normalized` — floats, no image size   | 7.79%      | 2.27%      | +0.0816     |
+| `pixels` — integers, image size stated | **90.33%** | **61.67%** | +0.0004     |
 
 Both runs had zero errors and returned a box on 100% of requests. The model was answering every time; 
 under one prompt it was answering in a frame it had never been given — every prediction landing ~8% of the screen height too low. 
@@ -421,7 +558,7 @@ So `prompt_style` is recorded in every result file, and two runs either side of 
 because Qwen ignores the instruction — but GUI-Owl has not been measured under `pixels` at all. 
 [`benchmark/README.md`](benchmark/README.md) has the 10-element control that splits the cause into its two halves.
 
-### Screenshots go out at full resolution
+#### Screenshots go out at full resolution
 
 `--max-image-dim` defaults to `0`, and downscaling is not a benchmark setting: a comparison is meaningful only when 
 every model saw the screenshot a consumer would actually send. 
@@ -431,6 +568,40 @@ A small control is ~34px across natively and ~15px after that resize, i.e. below
 
 Treat a non-zero `max_image_dim` in a result file the way you would treat `PARTIAL` — check what the number describes before quoting it. 
 Native costs roughly 4–5× the image tokens, and the image is essentially the whole input; `benchmark/README.md` has the measurements.
+
+### On the accessibility tree
+
+The page source is filtered - leaf nodes with no `text`, `content-desc`, `resource-id` or `hint` go, over-deep branches go,
+every attribute outside identifiers, text, state and bounds goes, invisible nodes stay and sent as text with the description.
+The model answers **one XPath or `NOT_FOUND`**. The XPath is run on the *full* dump, as a driver would run it on the live tree,
+the first node it selects is taken, as a driver's find-element takes it, and that node's `bounds` become the predicted box.
+From there the centroid and IoU rules above apply unchanged.
+
+What comes back is one of four things, recorded per row as `xml_outcome`, and **none of them is an error**. They are what the
+model answered, and a resume never pays to ask again:
+
+| `xml_outcome`   | meaning                                                   | in the tables above          |
+|-----------------|-----------------------------------------------------------|------------------------------|
+| `answered`      | the XPath selected at least one node; graded on the first | right or wrong, by geometry  |
+| `not_found`     | the model said `NOT_FOUND` — the one outcome it *decided* | not answered                 |
+| `invalid_xpath` | the text does not compile as XPath 1.0                    | not answered                 |
+| `no_match`      | valid XPath, zero nodes on this tree                      | not answered                 |
+
+Two consequences for reading a tree figure. First, *not answered* mixes a decision (`NOT_FOUND`) with two kinds of failure a
+driver would also reject, which is why the tables split them. Second, in a tree-then-screenshot cascade every outcome but
+`answered` falls through to the screenshot, and `answered` is final whether it was right or wrong — the fallback cannot see
+that a selected node is the wrong one.
+
+**The instructions are a file, not code.** The model reads `benchmark/model/prompts/xpath-android.txt` before the tree;
+`--xml-prompt` points a run at another file, and the harness appends the filtered tree and the description itself, in that
+order - tree first, so the ~38 requests about one screenshot share a cacheable prefix. Every result records the file's name
+and a hash of its text, and a checkpoint refuses to resume under a different prompt, so two tree results can always be told
+apart by what they were asked with. **The default file here is not the prompt our reference figures were measured with.** 
+That one ships inside a product and stays out of this repository; the default has the same shape, including the role, the 
+strict output contract, the grounding rules, the Android attribute priority, the ordinal pattern - in fewer words,
+so a run with it will differ from the published `xml-…` numbers by the prompt rather than by the harness.
+
+Request by request, with the measurements behind the caching and the prompt order, in [`benchmark/README.md`](benchmark/README.md#--input-xml--the-xml-track).
 
 ---
 
@@ -447,9 +618,11 @@ Native costs roughly 4–5× the image tokens, and the image is essentially the 
 
 The JSON carries far more: `summary.by_description` has each phrasing scored separately, 
 `summary.agreement` has how often the *same* element passes under one / all / some wordings, 
-`summary.by_source` has the figures split by which labelling the element came from (`gpt-`/`opus-` ids — the headline table above is `by_source.gpt`), 
+`summary.by_source` has the figures split by which labelling the element came from (`gpt-`/`opus-` ids — the screenshot table above is `by_source.gpt`), 
 `summary.answer_classes` and each row's `answer_class` say what the model did when it was wrong (see [When it is wrong](#when-it-is-wrong-what-did-it-do)), 
 and every row keeps the model's own untruncated answer in `raw` plus the `img_w`/`img_h` it was normalised against. 
+A tree-track file (`xml-…`) adds `summary.xml_outcomes`, each row's `xpath` and `xml_outcome`, and the prompt's name and hash;
+`score_cascade.py --json` writes the eight cascade lines with their sublines, overall and per phrasing. 
 `benchmark/README.md` documents every field.
 
 **Read `served_model` before quoting a number.** `--model` is a request, not a guarantee: 
@@ -472,7 +645,8 @@ Three things the runner does that are worth knowing before a long run:
   so re-reading them repairs the file: 30,921 rows in ~2 seconds against ~10 hours and 85M input
   tokens for a re-run. Cost is not the main argument — the model is not deterministic, so a re-run
   answers afresh and nobody can then tell a harness fix from a model that replied differently.
-  Re-scoring the same `raw` proves which one moved.
+  Re-scoring the same `raw` proves which one moved. On a tree-track file it re-runs every XPath
+  against the dumps instead of reparsing coordinates.
 - **`--rescore-gt` grades old answers on a ground truth that did not exist when they were made.**
   Same path, answer key swapped: each row's `gt_bbox` is replaced by the given dataset's box for the
   same (screenshot, element), joined with `--rescore-gt-prefix` naming the id prefix that dataset
@@ -510,7 +684,9 @@ data/checkpoints/…             per-screenshot progress; deleted once the run c
 
 Those paths are anchored on the repository root, not on the directory you run the command from,
 so a resume finds the earlier run's progress wherever you start it. Point the benchmark at the
-result with `--dataset data/my-dataset.jsonl` and `--images-dir path/to/screenshots`.
+result with `--dataset data/my-dataset.jsonl` and `--images-dir path/to/screenshots`. For the
+tree track you also need each screenshot's page source as `<screenshot_id>.xml` — a UiAutomator
+dump taken at the same moment — in the directory `--xml-dir` names.
 
 Budget `N + (N × E) + N` calls for N screenshots averaging E elements. At the 12.3 elements per
 screenshot we measured that is ~14 calls each, so the 841-screenshot corpus cost ~12,000 calls.
@@ -539,6 +715,7 @@ benchmark/
   README.md                 every metric, every field, and why each exists
   cli/ engine/ artifacts/   the flags · the run · checkpoint, result JSON, re-scoring, cascade rules
   model/ scoring/ workload/ the system under test · what an answer means · what gets scored
+  model/prompts/            the tree track's instructions file (see --xml-prompt)
 pipeline/                   the four labelling steps
 run_pipeline.py             pipeline entrypoint
 data/
@@ -548,7 +725,7 @@ data/
   dataset-v1-human-gpt.jsonl  its 10,568 gpt- elements on their own ← committed
   images/                   841 screenshots, <id>.png               ← committed
   xml/                      841 page-source dumps, <id>.xml         ← committed
-reference-results/          our published summaries                 ← committed
+reference-results/          our published summaries: vision-…, xml-…, cascade-…  ← committed
 ```
 
 Both tools write only inside the repository, and everything they write is gitignored:

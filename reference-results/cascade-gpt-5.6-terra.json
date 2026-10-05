@@ -1,0 +1,169 @@
+{
+  "note": "Tree-then-screenshot cascade for gpt-5.6-terra from the two files named, joined per (element, phrasing) by benchmark/score_cascade.py with --source gpt (10,568 elements x 3 phrasings = 31,704 rows). Lines 1-8 are counts['xml_correct' ... 'incorrect'] under overall and per phrasing under by_description. The screenshot half was consulted only where the tree gave nothing; vision_alone_* is filled only when the vision file is a full run.",
+  "xml_file": "reference-results/xml-gpt-5.6-terra-3phrasing-GT-v1-human-gpt-20261003-034948.json",
+  "xml_model": "gpt-5.6-terra",
+  "xml_prompt": "xpath-android.txt",
+  "xml_prompt_sha256": "a93444a5ee3d",
+  "vision_file": "reference-results/vision-gpt-5.6-terra-3phrasing-ONLY-FROM-xml-GT-v1-human-gpt-20261005-082111.json",
+  "vision_model": "gpt-5.6-terra",
+  "vision_prompt_style": "pixels",
+  "source": "gpt",
+  "xml_rows": 31704,
+  "vision_rows": 9944,
+  "excluded_xml_errors": 0,
+  "excluded_fall_through_no_vision_row": 0,
+  "vision_covers_all_rows": false,
+  "overall": {
+    "total": 31704,
+    "vision_rows_used": 9944,
+    "counts": {
+      "xml_correct": 18433,
+      "xml_incorrect": 3327,
+      "xml_not_answered": 9944,
+      "vision_correct": 9675,
+      "vision_incorrect": 269,
+      "vision_not_answered": 0,
+      "correct": 28108,
+      "incorrect": 3596
+    },
+    "shares": {
+      "xml_correct": 0.5814,
+      "xml_incorrect": 0.1049,
+      "xml_not_answered": 0.3137,
+      "vision_correct": 0.3052,
+      "vision_incorrect": 0.0085,
+      "vision_not_answered": 0.0,
+      "correct": 0.8866,
+      "incorrect": 0.1134
+    },
+    "xml_not_answered_by": {
+      "not_found": 9637,
+      "invalid_xpath": 3,
+      "no_match": 304
+    },
+    "vision_not_answered_by": {
+      "declined": 0,
+      "non_answer": 0
+    },
+    "keyboard_rows_in_fall_through": 4817,
+    "keyboard_rows": 5060,
+    "vision_alone_correct": null,
+    "vision_alone_accuracy": null
+  },
+  "by_description": {
+    "0": {
+      "style": "name",
+      "total": 10568,
+      "vision_rows_used": 3369,
+      "counts": {
+        "xml_correct": 6145,
+        "xml_incorrect": 1054,
+        "xml_not_answered": 3369,
+        "vision_correct": 3279,
+        "vision_incorrect": 90,
+        "vision_not_answered": 0,
+        "correct": 9424,
+        "incorrect": 1144
+      },
+      "shares": {
+        "xml_correct": 0.5815,
+        "xml_incorrect": 0.0997,
+        "xml_not_answered": 0.3188,
+        "vision_correct": 0.3103,
+        "vision_incorrect": 0.0085,
+        "vision_not_answered": 0.0,
+        "correct": 0.8917,
+        "incorrect": 0.1083
+      },
+      "xml_not_answered_by": {
+        "not_found": 3267,
+        "invalid_xpath": 1,
+        "no_match": 101
+      },
+      "vision_not_answered_by": {
+        "declined": 0,
+        "non_answer": 0
+      },
+      "keyboard_rows_in_fall_through": 1570,
+      "keyboard_rows": 1677,
+      "vision_alone_correct": null,
+      "vision_alone_accuracy": null
+    },
+    "1": {
+      "style": "label",
+      "total": 10568,
+      "vision_rows_used": 3487,
+      "counts": {
+        "xml_correct": 6170,
+        "xml_incorrect": 911,
+        "xml_not_answered": 3487,
+        "vision_correct": 3397,
+        "vision_incorrect": 90,
+        "vision_not_answered": 0,
+        "correct": 9567,
+        "incorrect": 1001
+      },
+      "shares": {
+        "xml_correct": 0.5838,
+        "xml_incorrect": 0.0862,
+        "xml_not_answered": 0.33,
+        "vision_correct": 0.3214,
+        "vision_incorrect": 0.0085,
+        "vision_not_answered": 0.0,
+        "correct": 0.9053,
+        "incorrect": 0.0947
+      },
+      "xml_not_answered_by": {
+        "not_found": 3384,
+        "invalid_xpath": 1,
+        "no_match": 102
+      },
+      "vision_not_answered_by": {
+        "declined": 0,
+        "non_answer": 0
+      },
+      "keyboard_rows_in_fall_through": 1700,
+      "keyboard_rows": 1764,
+      "vision_alone_correct": null,
+      "vision_alone_accuracy": null
+    },
+    "2": {
+      "style": "intent",
+      "total": 10568,
+      "vision_rows_used": 3088,
+      "counts": {
+        "xml_correct": 6118,
+        "xml_incorrect": 1362,
+        "xml_not_answered": 3088,
+        "vision_correct": 2999,
+        "vision_incorrect": 89,
+        "vision_not_answered": 0,
+        "correct": 9117,
+        "incorrect": 1451
+      },
+      "shares": {
+        "xml_correct": 0.5789,
+        "xml_incorrect": 0.1289,
+        "xml_not_answered": 0.2922,
+        "vision_correct": 0.2838,
+        "vision_incorrect": 0.0084,
+        "vision_not_answered": 0.0,
+        "correct": 0.8627,
+        "incorrect": 0.1373
+      },
+      "xml_not_answered_by": {
+        "not_found": 2986,
+        "invalid_xpath": 1,
+        "no_match": 101
+      },
+      "vision_not_answered_by": {
+        "declined": 0,
+        "non_answer": 0
+      },
+      "keyboard_rows_in_fall_through": 1547,
+      "keyboard_rows": 1619,
+      "vision_alone_correct": null,
+      "vision_alone_accuracy": null
+    }
+  }
+}
