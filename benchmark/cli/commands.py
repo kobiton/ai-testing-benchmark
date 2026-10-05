@@ -17,7 +17,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-from benchmark.artifacts.builder import finalize_from_checkpoint
+from benchmark.artifacts.cascade import fall_through_keys
+from benchmark.artifacts.builder import finalize_from_checkpoint, gt_boxes_from_dataset
 from benchmark.artifacts.rescoring import load_gt_override, rescore_result, rescored_filename
 from benchmark.cli.args import build_parser
 from benchmark.engine.runner import _install_stop_handlers, run_benchmark
@@ -82,7 +83,8 @@ def main():
         result = rescore_result(prior, str(Path(args.images_dir).resolve()), grid,
                                metric=args.metric, gt_override=gt_override,
                                gt_override_path=str(gt_path.resolve()) if gt_override is not None else "",
-                               gt_prefix=args.rescore_gt_prefix)
+                               gt_prefix=args.rescore_gt_prefix,
+                               xml_dir=str(Path(args.xml_dir).resolve()) if Path(args.xml_dir).exists() else "")
         output_dir.mkdir(parents=True, exist_ok=True)
         out_path = output_dir / rescored_filename(src.name, gt_stem)
         with open(out_path, "w") as f:
@@ -97,10 +99,14 @@ def main():
         logger.error("Dataset not found: %s", dataset_path)
         sys.exit(1)
 
-    # --finalize-only reads no images, and the run being recovered may well have been
-    # the thing that populated the cache dir this points at.
+    # --finalize-only reads no images, and the run being recovered may well have been the thing that populated the cache dir this points at.
     images_dir = Path(args.images_dir).resolve()
-    if not images_dir.exists() and not args.finalize_only:
+    xml_dir = Path(args.xml_dir).resolve()
+    if args.input == "xml":
+        if not xml_dir.exists() and not args.finalize_only:
+            logger.error("XML dump directory not found: %s", xml_dir)
+            sys.exit(1)
+    elif not images_dir.exists() and not args.finalize_only:
         logger.error("Images directory not found: %s", images_dir)
         sys.exit(1)
 
@@ -112,7 +118,31 @@ def main():
         logger.error("Dataset empty or no elements with bbox + descriptions")
         sys.exit(1)
 
+    # The cascade's vision subset: keys an XML result did not answer. Read before --limit so
+    # the two compose the obvious way (a pilot of the subset), and refused on the XML track,
+    # where "the rows XML did not answer" is the run's own output, not its input.
+    only_keys = None
+    if args.only_from:
+        if args.input == "xml":
+            logger.error("--only-from selects rows for the vision track; it cannot be combined with --input xml")
+            sys.exit(1)
+        with open(args.only_from) as f:
+            xml_result = json.load(f)
+        try:
+            only_keys, skipped = fall_through_keys(xml_result)
+        except ValueError as e:
+            logger.error("%s: %s", args.only_from, e)
+            sys.exit(1)
+        logger.info("--only-from %s: %d row(s) the XML run did not answer%s", Path(args.only_from).name, len(only_keys),
+                    f", {skipped} errored row(s) skipped (not fall-through until the XML run retries them)" if skipped else "")
+        if not only_keys:
+            logger.error("Nothing to do: the XML result answered every row")
+            sys.exit(1)
+
     was_limited = 0 < args.limit < len(dataset)
+    # Every labelled box, kept from before the sample is drawn, so a pilot's answer classes
+    # can see the elements on a screenshot that the sample left out — see `run_benchmark`.
+    all_gt_boxes = gt_boxes_from_dataset(dataset) if was_limited else None
     if was_limited:
         dataset = even_sample(dataset, args.limit)
         logger.info("Sampling %d elements evenly across the dataset (--limit)", len(dataset))
@@ -122,14 +152,10 @@ def main():
     # result files and a comparison table of one model against itself.
     if len(args.model) > 1 and not args.dry_run and not args.finalize_only:
         with httpx.Client() as probe_client:
-            loaded = _list_loaded_models(probe_client, args.proxy_url, args.api_key,
-                                         args.api_flavor)
+            loaded = _list_loaded_models(probe_client, args.proxy_url, args.api_key, args.api_flavor)
         if len(loaded) == 1:
-            logger.error(
-                "Asked to benchmark %d models but the endpoint has exactly one loaded "
-                "(%s) and does not route by name — every run would score that same "
-                "model. Benchmark one model per run, reloading the endpoint in "
-                "between.", len(args.model), loaded[0])
+            logger.error("Asked to benchmark %d models but the endpoint has exactly one loaded (%s) and does not route by name — every run would score that same model. "
+                "Benchmark one model per run, reloading the endpoint in between.", len(args.model), loaded[0])
             sys.exit(1)
 
     date_str = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -152,6 +178,7 @@ def main():
                 prompt_style=args.prompt_style,
                 output_dir=str(output_dir.resolve()),
                 dataset_path=str(dataset_path),
+                input_mode=args.input,
             )
         else:
             result = run_benchmark(
@@ -172,8 +199,23 @@ def main():
                 coord_grid=args.coord_grid,
                 api_flavor=args.api_flavor,
                 prompt_style=args.prompt_style,
+                input_mode=args.input,
+                xml_dir=str(xml_dir),
+                gt_boxes=all_gt_boxes,
+                rpm=args.rpm,
+                max_requests=args.max_requests,
+                only_keys=only_keys,
             )
         result["dataset_path"] = str(dataset_path)
+        if only_keys is not None:
+            # Which XML run chose these rows. Without it the file is a vision result over an
+            # oddly shaped third of the dataset, and its accuracy — over the rows the tree
+            # could not place, the hard ones — would be read as the model's.
+            result["only_from"] = str(Path(args.only_from).resolve())
+            # Pairs this run selected, not keys in the source file: the XML result may hold
+            # rows of elements this dataset does not (the other labelling's), and those are
+            # not part of this run.
+            result["only_from_rows"] = result.get("summary", {}).get("selected_elements", result.get("total_elements", 0))
         ckpt_path = result.pop("checkpoint_path", "")
         stopped_early = result.get("stopped_early", False)
 
@@ -203,6 +245,10 @@ def main():
         # question a pilot's number raises is how many it is over.
         if was_limited:
             safe_model = f"{safe_model}-PILOT-{len(dataset)}"
+        # A subset chosen by an XML run is not a sample of the dataset: its accuracy is over
+        # the rows the tree could not place. Say so where the PILOT mark is said.
+        if only_keys is not None:
+            safe_model = f"{safe_model}-ONLY-FROM-xml"
         # Which ground truth the score is against. Unlike the infixes above this one is
         # unconditional, because there is no single obvious ground truth for it to stay
         # quiet about: `--dataset` points at the shipped corpus by default but at whatever
@@ -213,7 +259,11 @@ def main():
         gt_stem = Path(dataset_path).name.removesuffix(".jsonl")
         gt_stem = gt_stem[len("dataset-"):] if gt_stem.startswith("dataset-") else gt_stem
         safe_model = f"{safe_model}-GT-{gt_stem.replace('/', '-').replace(':', '-')}"
-        out_path = output_dir / f"vision-{safe_model}-{date_str}.json"
+        # `xml-` rather than `vision-` for the XML track: the dropdown shows filenames,
+        # and a file that measured the other strategy must not sit there looking like a vision run of the same model.
+        # Everything after the prefix is spelled the same way.
+        kind = "xml" if args.input == "xml" else "vision"
+        out_path = output_dir / f"{kind}-{safe_model}-{date_str}.json"
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         logger.info("Results written to %s", out_path)
@@ -227,16 +277,11 @@ def main():
         errors = result.get("summary", {}).get("error_count", 0)
         if ckpt_path:
             if stopped_early:
-                logger.info("Keeping %s — this run was stopped part-way, so re-running "
-                            "it carries on from the %d scored element(s) instead of "
-                            "paying for them again", ckpt_path, len(result["results"]))
+                logger.info("Keeping %s — this run was stopped part-way, so re-running it carries on from the %d scored element(s) instead of paying for them again", ckpt_path, len(result["results"]))
             elif errors:
-                logger.info("Keeping %s so the next run retries the %d errored "
-                            "element(s)", ckpt_path, errors)
+                logger.info("Keeping %s so the next run retries the %d errored element(s)", ckpt_path, errors)
             elif was_limited:
-                logger.info("Keeping %s — this was a --limit run, so its %d scored "
-                            "pair(s) carry over to the next run of this dataset",
-                            ckpt_path, len(result["results"]))
+                logger.info("Keeping %s — this was a --limit run, so its %d scored pair(s) carry over to the next run of this dataset",ckpt_path, len(result["results"]))
             else:
                 Path(ckpt_path).unlink(missing_ok=True)
 
@@ -245,22 +290,14 @@ def main():
 
     if len(all_summaries) > 1:
         print(f"\n=== Model Comparison (primary metric: {args.metric}) ===")
-        # `Box%` sits between the two accuracies because it is what makes them comparable or
-        # not. A model at 15% answered a different question from one at 100%, and without the
-        # column the higher Centroid reads as the better model — see `bbox_coverage`.
-        print(f"{'Model':<25} {'Centroid':>10} {'Box%':>7} {'IoU Acc':>9}"
-              f" {'IoU|box':>8} {'Errors':>8}")
+        # `Box%` sits between the two accuracies because it is what makes them comparable or not.
+        # A model at 15% answered a different question from one at 100%, and without the column the higher Centroid reads as the better model — see `bbox_coverage`.
+        print(f"{'Model':<25} {'Centroid':>10} {'Box%':>7} {'IoU Acc':>9} {'IoU|box':>8} {'Errors':>8}")
         print("-" * 78)
         for s in all_summaries:
             cov = s.get("bbox_coverage")
             given = s.get("iou_accuracy_given_bbox")
-            print(
-                f"{s['model']:<25} {s['centroid_accuracy']*100:>9.1f}%"
-                f" {(f'{cov*100:.0f}%' if cov is not None else '—'):>7}"
-                f" {s['iou_accuracy']*100:>8.1f}%"
-                f" {(f'{given*100:.1f}%' if given is not None else '—'):>8}"
-                f" {s['error_count']:>8}"
-            )
+            print(f"{s['model']:<25} {s['centroid_accuracy']*100:>9.1f}% {(f'{cov*100:.0f}%' if cov is not None else '—'):>7} {s['iou_accuracy']*100:>8.1f}% {(f'{given*100:.1f}%' if given is not None else '—'):>8} {s['error_count']:>8}")
         print("\n  Box%    — share of requests that returned a bounding box at all.")
         print("  IoU|box — IoU ≥ 0.5 among only those. IoU Acc = Box% x IoU|box.")
         print("  Where the consumer requires a bounding box, Box% is a gate, not a metric:")
@@ -272,47 +309,41 @@ def main():
         print(f"\n=== {s['model']} (primary metric: {primary}) ===")
         star_c = " *" if primary == "centroid" else ""
         star_i = " *" if primary == "iou" else ""
-        print(f"  Centroid Accuracy (center inside gt): {s['centroid_accuracy']*100:.1f}%  "
-              f"({s['centroid_pass_count']}/{s['total_elements']} pass){star_c}")
-        print(f"  IoU Accuracy  (IoU≥{IOU_THRESHOLD}): {s['iou_accuracy']*100:.1f}%  "
-              f"({s['iou_pass_count']}/{s['total_elements']} pass){star_i}")
-        # Printed right under the two accuracies, and only when it has something to say, so a
-        # model that always returns a box adds no noise here.
+        print(f"  Centroid Accuracy (center inside gt): {s['centroid_accuracy']*100:.1f}%  ({s['centroid_pass_count']}/{s['total_elements']} pass){star_c}")
+        print(f"  IoU Accuracy  (IoU≥{IOU_THRESHOLD}): {s['iou_accuracy']*100:.1f}%  ({s['iou_pass_count']}/{s['total_elements']} pass){star_i}")
+        # Printed right under the two accuracies, and only when it has something to say, so a model that always returns a box adds no noise here.
         if s.get("point_only_count"):
-            print(f"  Bbox coverage: {s.get('bbox_coverage', 0)*100:.1f}%  "
-                  f"({s.get('bbox_count', 0)}/{s['total_elements']} returned a box; "
-                  f"{s['point_only_count']} were a bare click point)")
-            print(f"  IoU≥{IOU_THRESHOLD} among those: "
-                  f"{s.get('iou_accuracy_given_bbox', 0)*100:.1f}%   "
-                  f"<- the IoU above is this x coverage")
+            print(f"  Bbox coverage: {s.get('bbox_coverage', 0)*100:.1f}%  ({s.get('bbox_count', 0)}/{s['total_elements']} returned a box; {s['point_only_count']} were a bare click point)")
+            print(f"  IoU≥{IOU_THRESHOLD} among those: {s.get('iou_accuracy_given_bbox', 0)*100:.1f}%   <- the IoU above is this x coverage")
         print(f"  Mean IoU:     {s['mean_iou']:.3f}")
         print(f"  Median IoU:   {s['median_iou']:.3f}")
         print(f"  Errors:       {s['error_count']} (timeout: {s['timeout_count']})")
-        print(f"  Avg latency:  {s['avg_latency_ms']:.0f}ms  "
-              f"(P50={s['p50_latency_ms']:.0f}ms, P95={s['p95_latency_ms']:.0f}ms)")
+        print(f"  Avg latency:  {s['avg_latency_ms']:.0f}ms  (P50={s['p50_latency_ms']:.0f}ms, P95={s['p95_latency_ms']:.0f}ms)")
+        xo = s.get("xml_outcomes") or {}
+        if xo:
+            # The XML track's own split: what produced a node and was right or wrong, and what produced none — by the model's own NOT_FOUND, or by an XPath a driver could not have acted on.
+            print(f"\n  XML outcomes over {xo['total']} request(s):")
+            print(f"    answered, right element   {xo['answered_correct']:>6}  ({xo['shares']['answered_correct']*100:.1f}%)")
+            print(f"    answered, wrong element   {xo['answered_incorrect']:>6}  ({xo['shares']['answered_incorrect']*100:.1f}%)")
+            print(f"    not answered              {xo['not_answered']:>6}  ({xo['shares']['not_answered']*100:.1f}%)  = NOT_FOUND {xo['not_found']} + invalid XPath {xo['invalid_xpath']} + no match {xo['no_match']}")
+            if xo["error"]:
+                print(f"    errors (retry on resume)  {xo['error']:>6}")
+            for idx in sorted(xo.get("by_description") or {}, key=int):
+                d = xo["by_description"][idx]
+                print(f"    {d['style']:<8} right {d['answered_correct']:>5}  wrong {d['answered_incorrect']:>5}  not answered {d['not_answered']:>5}  (NOT_FOUND {d['not_found']})")
 
-        # The point of a multi-phrasing run. The figures above average these, and the
-        # average is the least interesting of the numbers on this screen.
+        # The point of a multi-phrasing run. The figures above average these, and the average is the least interesting of the numbers on this screen.
         by_desc = s.get("by_description") or {}
         if by_desc:
-            print(f"\n  By phrasing — {s.get('unique_elements', 0)} element(s) "
-                  f"x {len(by_desc)} phrasing(s):")
-            print(f"    {'Phrasing':<9} {'Centroid':>9} {'IoU':>8} {'MeanIoU':>8}"
-                  f" {'In tok':>8} {'Out tok':>8} {'Errors':>7}")
+            print(f"\n  By phrasing — {s.get('unique_elements', 0)} element(s) x {len(by_desc)} phrasing(s):")
+            print(f"    {'Phrasing':<9} {'Centroid':>9} {'IoU':>8} {'MeanIoU':>8} {'In tok':>8} {'Out tok':>8} {'Errors':>7}")
             print("    " + "-" * 61)
             for idx in sorted(by_desc, key=int):
                 d = by_desc[idx]
-                print(f"    {d['style']:<9} {d['centroid_accuracy']*100:>8.1f}%"
-                      f" {d['iou_accuracy']*100:>7.1f}% {d['mean_iou']:>8.3f}"
-                      f" {d['avg_input_tokens']:>8.0f} {d['avg_output_tokens']:>8.0f}"
-                      f" {d['error_count']:>7}")
+                print(f"    {d['style']:<9} {d['centroid_accuracy']*100:>8.1f}% {d['iou_accuracy']*100:>7.1f}% {d['mean_iou']:>8.3f} {d['avg_input_tokens']:>8.0f} {d['avg_output_tokens']:>8.0f} {d['error_count']:>7}")
         ag = s.get("agreement") or {}
         if ag:
-            print(f"\n  Agreement over the {ag['scored_elements']} element(s) scored "
-                  f"under all {ag['phrasings']} phrasings:")
-            print(f"    any  {ag['any_accuracy']*100:>5.1f}%  ({ag['any_pass_count']})"
-                  f"  — at least one phrasing found it")
-            print(f"    all  {ag['all_accuracy']*100:>5.1f}%  ({ag['all_pass_count']})"
-                  f"  — every phrasing found it")
-            print(f"    mixed {ag['mixed_count']} element(s) pass under some phrasings "
-                  f"and fail under others")
+            print(f"\n  Agreement over the {ag['scored_elements']} element(s) scored under all {ag['phrasings']} phrasings:")
+            print(f"    any  {ag['any_accuracy']*100:>5.1f}%  ({ag['any_pass_count']})  — at least one phrasing found it")
+            print(f"    all  {ag['all_accuracy']*100:>5.1f}%  ({ag['all_pass_count']})  — every phrasing found it")
+            print(f"    mixed {ag['mixed_count']} element(s) pass under some phrasings and fail under others")

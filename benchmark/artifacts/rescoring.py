@@ -24,6 +24,8 @@ from PIL import Image
 from benchmark.scoring.coords import _norm_dims
 from benchmark.scoring.metrics import IOU_THRESHOLD, _compute_iou, _point_inside_bbox, _predicted_centroid
 from benchmark.scoring.parsing import _parse_response
+from benchmark.scoring.xpath import xml_prediction
+from benchmark.model.xml_tree import ViewTreeStore
 from benchmark.artifacts.builder import build_result
 
 logger = logging.getLogger(__name__)
@@ -177,7 +179,8 @@ def _grade(r: dict, pred_bbox, pred_point, gt: dict) -> None:
 
 def rescore_result(prior: dict, images_dir: str, coord_grid: int,
                    metric: str = "", gt_override: Optional[dict] = None,
-                   gt_override_path: str = "", gt_prefix: str = "") -> dict:
+                   gt_override_path: str = "", gt_prefix: str = "",
+                   xml_dir: str = "") -> dict:
     """Re-score a finished result file from each row's `raw`, calling no model at all.
 
     The fourth path into `build_result`, alongside a completed run, a stopped one and
@@ -219,6 +222,15 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
     dim_cache: dict = {}
     reparsed = changed = kept_error = missing_dims = 0
 
+    # An XML-track file holds XPaths in `raw`, not coordinates, and `_parse_response` would happily read the digits out of `(//android.widget.Button)[2]` as a box.
+    # Those rows go through `xml_prediction` against the same dumps the run used — or,
+    # without `--xml-dir`, keep their boxes and are only re-graded (which is all a `--rescore-gt` needs).
+    is_xml = prior.get("input") == "xml"
+    trees = ViewTreeStore(xml_dir) if (is_xml and xml_dir) else None
+    if is_xml and not trees:
+        logger.warning("XML-track result and no --xml-dir: the XPaths are not re-run, the existing boxes are re-graded as they are.")
+    missing_xml = 0
+
     dropped_no_gt = dropped_ambiguous = description_mismatch = 0
     out_rows = []
     for row in rows:
@@ -249,6 +261,32 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
         # rather than per-branch is what stops the carried-over rows keeping it.
         r.pop("click_inside", None)
         raw = r.get("raw") or ""
+        if is_xml:
+            vt = trees.get(r.get("screenshot_id", "")) if trees else None
+            # Transport errors stay what they were, as on the vision path; an XML outcome is never an error, so every answered row has `error == ""` and is re-run.
+            if r.get("error") or not raw or vt is None:
+                if vt is None and trees is not None and not r.get("error") and raw:
+                    missing_xml += 1
+                else:
+                    kept_error += 1
+                if gt_override is not None:
+                    _grade(r, r.get("pred_bbox"), r.get("pred_point"), r.get("gt_bbox") or {})
+                out_rows.append(r)
+                continue
+            before = _predicted_centroid(r)
+            pred = xml_prediction(raw, vt.tree, vt.width, vt.height)
+            r.update({
+                "pred_bbox": pred["pred_bbox"], "pred_point": None,
+                "xpath": pred["xpath"], "xml_outcome": pred["xml_outcome"],
+                "xpath_matches": pred["xpath_matches"],
+                "img_w": vt.width, "img_h": vt.height, "input": "xml",
+            })
+            _grade(r, pred["pred_bbox"], None, r.get("gt_bbox") or {})
+            reparsed += 1
+            if before != _predicted_centroid(r):
+                changed += 1
+            out_rows.append(r)
+            continue
         if not _is_reparseable(r.get("error", "")) or not raw:
             kept_error += 1
             if gt_override is not None:
@@ -293,6 +331,8 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
             "read it from, so a pixel-scale answer could not be normalised. Point "
             "--images-dir at the screenshots, or pass --coord-grid, which needs neither.",
             missing_dims)
+    if missing_xml:
+        logger.warning("%d row(s) left untouched: no XML dump for their screenshot in %s.",missing_xml, xml_dir)
 
     if gt_override is not None:
         logger.info("Ground truth replaced from %s: %d row(s) kept, %d dropped whose element it does not hold", gt_override_path, len(out_rows), dropped_no_gt)
@@ -347,6 +387,7 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
         or len({(r.get("screenshot_id"), r.get("element_id")) for r in out_rows}),
         selected_elements=summary.get("selected_elements") or len(out_rows),
         stopped_early=bool(prior.get("stopped_early")),
+        input_mode=prior.get("input") or "screenshot",
     )
     result.pop("checkpoint_path", None)
     # `date` is when the inference happened, and that is still the original run — the

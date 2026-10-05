@@ -64,11 +64,15 @@ def _answer_classes(results: list, metric: str, gt_boxes: dict = None) -> dict:
                           calling it a wrong choice would be false. Cannot occur for a
                           point-only answer, which has no area to overlap with.
     - `empty_space`    — centre on no labelled element at all.
-    - `declined`       — no box because the model answered in prose ("There are none."): the
-                          only false negative this prompt can produce, and rare, because the
-                          prompt allows no such answer. Read the count as a fact about the
-                          prompt before reading it as one about the model.
-    - `non_answer`     — timeout, HTTP error, truncation: nothing the model decided.
+    - `declined`       — no box because the model said there was nothing to box. On the
+                          vision track that is prose ("There are none."), rare because the
+                          prompt allows no such answer — read the count as a fact about the
+                          prompt before reading it as one about the model. On the XML track
+                          it is `NOT_FOUND`, which that prompt invites, so there the count
+                          is the model's: the "could not find" case proper.
+    - `non_answer`     — timeout, HTTP error, truncation: nothing the model decided. On the
+                          XML track also an XPath that does not compile or matches no node:
+                          the model did answer, but with something a driver cannot act on.
 
     The other elements' boxes come from `gt_boxes` — the dataset, via
     `gt_boxes_from_dataset` — when the caller has it, and from the run's own rows on the
@@ -90,8 +94,13 @@ def _answer_classes(results: list, metric: str, gt_boxes: dict = None) -> dict:
     for r in results:
         r.pop("answer_class_target", None)
         err = r.get("error") or ""
+        outcome = r.get("xml_outcome") or ""
         if err:
             cls = "declined" if err.startswith(_DECLINED_PREFIXES) else "non_answer"
+        elif outcome == "not_found":
+            cls = "declined"
+        elif outcome in ("invalid_xpath", "no_match"):
+            cls = "non_answer"
         elif r.get("pass_centroid"):
             cls = "right_element"
         else:
@@ -122,6 +131,49 @@ def _answer_classes(results: list, metric: str, gt_boxes: dict = None) -> dict:
         counts[cls] += 1
     total = len(results)
     return {c: {"count": n, "share": round(n / total, 4) if total else 0} for c, n in counts.items()}
+
+
+XML_OUTCOME_KEYS = ("answered_correct", "answered_incorrect", "not_found", "invalid_xpath", "no_match", "error")
+
+
+def _xml_outcomes(results: list, description_indices: list) -> dict:
+    """What the XML track's rows came back as, counted the way the cascade needs them.
+
+    Empty unless the rows carry `xml_outcome`, i.e. unless this is an `--input xml` file.
+    `answered_correct` / `answered_incorrect` split the rows that produced a box by the
+    **centroid** rule regardless of `--metric`, because that is the rule an XML-then-vision
+    cascade is counted by: the centre of the returned box inside the ground-truth box.
+    `not_answered` sums the three outcomes that fall through to vision — `NOT_FOUND`, an
+    XPath that does not compile, an XPath matching no node — and each is also given on its
+    own, because the first is the model's decision and the other two are not. `error` is
+    transport: a retry would change it, so it is outside the cascade's buckets.
+    """
+    rows = [r for r in results if r.get("xml_outcome") or r.get("input") == "xml"]
+    if not rows:
+        return {}
+
+    def block(rs: list) -> dict:
+        n = len(rs)
+        c = {
+            "total": n,
+            "answered_correct": sum(1 for r in rs if r.get("xml_outcome") == "answered" and r.get("pass_centroid")),
+            "answered_incorrect": sum(1 for r in rs if r.get("xml_outcome") == "answered" and not r.get("pass_centroid")),
+            "not_found": sum(1 for r in rs if r.get("xml_outcome") == "not_found"),
+            "invalid_xpath": sum(1 for r in rs if r.get("xml_outcome") == "invalid_xpath"),
+            "no_match": sum(1 for r in rs if r.get("xml_outcome") == "no_match"),
+            "error": sum(1 for r in rs if r.get("error")),
+        }
+        c["not_answered"] = c["not_found"] + c["invalid_xpath"] + c["no_match"]
+        c["shares"] = {k: (round(c[k] / n, 4) if n else 0) for k in XML_OUTCOME_KEYS + ("not_answered",)}
+        return c
+
+    out = block(rows)
+    if len(description_indices) > 1:
+        out["by_description"] = {}
+        for idx in sorted({r.get("description_index", 0) for r in rows}):
+            d_rows = [r for r in rows if r.get("description_index", 0) == idx]
+            out["by_description"][str(idx)] = {"style": _style_of(idx), **block(d_rows)}
+    return out
 
 
 def _by_source(results: list, description_indices: list, metric: str) -> dict:
@@ -229,6 +281,8 @@ def build_result(
     *,
     prompt_style: str,
     gt_boxes: dict = None,
+    # Which track produced the rows. `screenshot` stays the default, `xml` adds `summary.xml_outcomes`.
+    input_mode: str = "screenshot",
 ) -> dict:
     """Score `results` and shape them into the result file.
 
@@ -270,8 +324,7 @@ def build_result(
     in_toks = [r.get("input_tokens", 0) for r in results]
     out_toks = [r.get("output_tokens", 0) for r in results]
     cached_toks = [r.get("cached_input_tokens", 0) for r in results]
-    counted = sum(1 for r in results
-                  if r.get("input_tokens") or r.get("output_tokens"))
+    counted = sum(1 for r in results if r.get("input_tokens") or r.get("output_tokens"))
 
     # A prediction pushed against the [0,1] edge is the fingerprint of a coordinate
     # convention the parser read wrongly, not of a model aiming at the screen edge.
@@ -361,6 +414,7 @@ def build_result(
     # Labels every row first (`answer_class`), so `_by_source` can count them per labelling.
     answer_classes = _answer_classes(results, metric, gt_boxes)
     by_source = _by_source(results, description_indices, metric)
+    xml_outcomes = _xml_outcomes(results, description_indices)
 
     summary = {
         # Rows, i.e. how many times a model was asked to ground something. On a
@@ -415,6 +469,9 @@ def build_result(
         **({"by_source": by_source} if by_source else {}),
         # What the model did on every row, not only whether it passed — see `_answer_classes`.
         "answer_classes": answer_classes,
+        # XML track only: answered right / answered wrong / NOT_FOUND / invalid XPath / no match,
+        # the buckets the XML → vision cascade is counted in. See `_xml_outcomes`.
+        **({"xml_outcomes": xml_outcomes} if xml_outcomes else {}),
         # Tokens — the cost column. Self-hosted models have no per-token price, so the
         # figure to compare is throughput: tokens and seconds per element at a known
         # concurrency, against the hourly cost of the GPU.
@@ -427,6 +484,8 @@ def build_result(
         # repeats across every element of one screenshot — so this is what stops the
         # input figure looking erratic.
         "total_cached_input_tokens": sum(cached_toks),
+        # Anthropic only: tokens written into the cache, billed above the plain input rate. Zero on every other endpoint.
+        "total_cache_creation_input_tokens": sum(r.get("cache_creation_input_tokens", 0) or 0 for r in results),
         "cached_input_fraction": (round(sum(cached_toks) / sum(in_toks), 4)
                                   if sum(in_toks) else 0),
         "p95_output_tokens": (round(sorted(out_toks)[int(len(out_toks) * 0.95)], 1)
@@ -462,9 +521,14 @@ def build_result(
         logger.info("    %-7s %s=%.1f%%  IoU=%.1f%%  (%d scored, %d errors)",
                     d["style"], metric, d["primary_accuracy"] * 100,
                     d["iou_accuracy"] * 100, d["total"], d["error_count"])
+    if xml_outcomes:
+        logger.info("  XML outcomes: answered right %d, answered wrong %d, NOT_FOUND %d, invalid XPath %d, no match %d, errors %d  (not answered = %d, %.1f%%)",
+                    xml_outcomes["answered_correct"], xml_outcomes["answered_incorrect"],
+                    xml_outcomes["not_found"], xml_outcomes["invalid_xpath"],
+                    xml_outcomes["no_match"], xml_outcomes["error"],
+                    xml_outcomes["not_answered"], xml_outcomes["shares"]["not_answered"] * 100)
     if agreement:
-        logger.info("    agreement over %d element(s) with all %d phrasing(s): "
-                    "any=%.1f%%  all=%.1f%%  mixed=%d",
+        logger.info("    agreement over %d element(s) with all %d phrasing(s): any=%.1f%%  all=%.1f%%  mixed=%d",
                     agreement["scored_elements"], agreement["phrasings"],
                     agreement["any_accuracy"] * 100, agreement["all_accuracy"] * 100,
                     agreement["mixed_count"])
@@ -521,6 +585,8 @@ def build_result(
         # `pixels`, same model, same images, same ground truth. Two runs that differ only
         # by it are otherwise distinguishable in this directory by timestamp alone.
         "prompt_style": prompt_style,
+        # `screenshot` or `xml` — which input the model was given. A file without the key predates the XML track and is a screenshot run.
+        "input": input_mode,
         # Part of what error_count means: a run whose cap was too low for a thinking
         # model records truncations as errors, so the cap has to be readable off the
         # artifact to tell that apart from a model that answers badly.
@@ -561,6 +627,7 @@ def finalize_from_checkpoint(
     output_dir: str,
     dataset_path: str,
     prompt_style: str = "pixels",
+    input_mode: str = "screenshot",
 ) -> dict:
     """Rebuild a result file from an existing checkpoint, calling no model at all.
 
@@ -572,7 +639,7 @@ def finalize_from_checkpoint(
     `--limit` still applies, because the checkpoint is not keyed on it and may hold
     elements from a wider run.
     """
-    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style)
+    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style, input_mode)
     resumed, _done, meta = checkpoint.read(ckpt)
     if not resumed:
         logger.error("No checkpoint at %s — nothing to finalize.", ckpt)
@@ -612,6 +679,8 @@ def finalize_from_checkpoint(
     # Same rule again, and the default is a fact rather than a guess: a checkpoint written
     # before --prompt-style existed can only have come from the one prompt there was.
     prompt_style = meta.get("prompt_style") or "normalized"
+    # The track is decided by which checkpoint file was opened; the header only confirms it.
+    input_mode = meta.get("input") or input_mode
 
     logger.info("Finalizing %d of %d selected (element, phrasing) pair(s) from %s",
                 len(results), len(pairs), ckpt)
@@ -635,4 +704,5 @@ def finalize_from_checkpoint(
         stopped_early=True,
         checkpoint_path=str(ckpt),
         gt_boxes=gt_boxes_from_dataset(dataset),
+        input_mode=input_mode,
     )

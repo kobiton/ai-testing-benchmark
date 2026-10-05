@@ -7,3 +7,6 @@ tqdm>=4.66.0
 json-repair>=0.30.0
 # Reads image dimensions, and resizes only when --max-image-dim is set.
 Pillow>=10.0.0
+# --input xml: runs the model's XPath (XPath 1.0 with contains(translate(...)) and (//x)[n])
+# against the page-source dump; the stdlib ElementTree's XPath subset cannot.
+lxml>=5.0.0

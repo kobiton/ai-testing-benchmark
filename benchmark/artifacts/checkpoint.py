@@ -35,8 +35,13 @@ META_KEY = "__meta__"
 
 
 def path_for(output_dir, dataset_path: str, model: str,
-             prompt_style: str = "pixels") -> Path:
-    """One checkpoint per (dataset, model, prompt style).
+             prompt_style: str = "pixels", input_mode: str = "screenshot") -> Path:
+    """One checkpoint per (dataset, model, prompt style) — or per (dataset, model) for XML.
+
+    The XML track (`--input xml`) forks its own file, suffixed `-xml`, for the same reason
+    styles fork: its rows answer a different question (an XPath over a tree, not a box over
+    an image) and are not reusable by a screenshot run or the reverse. The coordinate
+    prompt style does not apply to it, so the suffix names the input.
 
     Not keyed on --limit: an even-stride subset is drawn from the same rows, so a
     2,000-element run's results are reusable by a later full run. Not keyed on the
@@ -56,7 +61,10 @@ def path_for(output_dir, dataset_path: str, model: str,
     """
     safe_model = model.replace("/", "-").replace(":", "-")
     stem = Path(dataset_path).stem
-    suffix = "" if prompt_style == "normalized" else f"-{prompt_style}"
+    if input_mode == "xml":
+        suffix = "-xml"
+    else:
+        suffix = "" if prompt_style == "normalized" else f"-{prompt_style}"
     return Path(output_dir) / "checkpoints" / f"{stem}-{safe_model}{suffix}.partial.jsonl"
 
 

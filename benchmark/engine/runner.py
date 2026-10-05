@@ -15,6 +15,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -24,7 +25,9 @@ from tqdm import tqdm
 from benchmark.artifacts import checkpoint
 from benchmark.scoring.coords import _coord_grid_for, _normalize_model_name
 from benchmark.scoring.metrics import IOU_THRESHOLD, _compute_iou, _point_inside_bbox
-from benchmark.model.client import _call_model, _list_loaded_models, _probe_served_model
+from benchmark.model.client import _call_model, _call_model_text, _list_loaded_models, _probe_served_model
+from benchmark.model.xml_tree import ViewTreeStore, build_xml_prompt
+from benchmark.scoring.xpath import xml_prediction
 from benchmark.workload.phrasings import _expand_pairs, _style_of
 from benchmark.artifacts.builder import build_result, gt_boxes_from_dataset
 
@@ -54,6 +57,36 @@ def _install_stop_handlers() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, _handler)
 
+
+class RatePacer:
+    """Spaces request starts evenly so a run never exceeds `rpm` requests a minute.
+
+    One instance is shared by every worker. Each caller takes the next free slot under the
+    lock and sleeps until it arrives, so the interval between any two starts is at least
+    60/rpm seconds no matter how many workers there are — a strict ceiling, not an average
+    that bursts and then idles. The sleep is `_STOP.wait`, so a stop signal wakes the sleeper
+    at once; the request it was about to make still goes out, like any other in-flight one.
+
+    It counts model calls, not HTTP attempts: the back-off retries inside
+    `_post_with_retries` are not paced, because they are the endpoint already telling us to
+    wait. A `--rpm` well under the account's limit is what keeps those from happening.
+    """
+
+    def __init__(self, rpm: int):
+        self.interval = 60.0 / rpm
+        self._lock = threading.Lock()
+        self._next_slot = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_slot)
+            self._next_slot = start + self.interval
+        delay = start - now
+        if delay > 0:
+            _STOP.wait(delay)
+
+
 # ---------------------------------------------------------------------------
 # Single-element benchmark
 # ---------------------------------------------------------------------------
@@ -75,6 +108,7 @@ def _benchmark_element(
     coord_grid: int = 0,
     api_flavor: str = "proxy",
     prompt_style: str = "pixels",
+    pacer: "RatePacer | None" = None,
 ) -> dict:
     screenshot_id = row["screenshot_id"]
     element_id = row["element_id"]
@@ -110,14 +144,18 @@ def _benchmark_element(
             "iou": 0.0, "pass_iou": False, "pass_centroid": False,
             "error": "image not found", "latency_ms": 0,
             "input_tokens": 0, "output_tokens": 0,
-            "cached_input_tokens": 0, "raw": "",
+            "cached_input_tokens": 0, "cache_creation_input_tokens": 0, "raw": "",
             "img_w": 0, "img_h": 0,
         }
 
+    if pacer:
+        pacer.wait()
     pred_bbox, pred_point, latency_ms, error, meta = _call_model(
         client, proxy_url, api_key, model, image_path, desc, timeout, coord_format,
         thinking_budget, max_image_dim, max_tokens, temperature, coord_grid,
         api_flavor, prompt_style,
+        # The image is what every request about this screenshot shares; see `_cache_routing`.
+        cache_key=screenshot_id,
     )
 
     iou = _compute_iou(pred_bbox, gt_bbox) if pred_bbox else 0.0
@@ -150,6 +188,7 @@ def _benchmark_element(
         "input_tokens": meta.get("input_tokens", 0),
         "output_tokens": meta.get("output_tokens", 0),
         "cached_input_tokens": meta.get("cached_input_tokens", 0),
+        "cache_creation_input_tokens": meta.get("cache_creation_input_tokens", 0),
         "raw": meta.get("raw", ""),
         # The dimensions this answer was normalised against — the resized ones when
         # --max-image-dim is in force, not the file's. Recorded per row so `--rescore`
@@ -158,6 +197,99 @@ def _benchmark_element(
         "img_w": meta.get("img_w", 0),
         "img_h": meta.get("img_h", 0),
     }
+
+def _benchmark_element_xml(
+    client: httpx.Client,
+    proxy_url: str,
+    api_key: str,
+    model: str,
+    row: dict,
+    description_index: int,
+    timeout: int,
+    max_tokens: int,
+    temperature: float,
+    api_flavor: str,
+    trees: ViewTreeStore,
+    pacer: "RatePacer | None" = None,
+) -> dict:
+    """One (element, phrasing) under `--input xml`: the tree in, an XPath out, a box graded.
+
+    Same row shape as `_benchmark_element` plus four fields — `input`, `xpath`,
+    `xml_outcome`, `xpath_matches` — so every reader of a result file (Result Analysis,
+    `--rescore`, the cascade scorer) sees one schema. The screenshot is never opened;
+    `img_w`/`img_h` are the tree's own `<hierarchy width height>`, which is what its
+    `bounds` are normalised against.
+
+    `NOT_FOUND`, an invalid XPath and an XPath matching nothing all come back with
+    `error == ""`: they are the model's answer, recorded in `xml_outcome`, and a resume must
+    not pay to ask again. Only a transport failure is an error here.
+    """
+    screenshot_id = row["screenshot_id"]
+    element_id = row["element_id"]
+    gt_bbox = row["bbox"]
+    descriptions = row["descriptions"]
+    description_index = min(description_index, len(descriptions) - 1)
+    desc = descriptions[description_index]
+    base = {
+        "screenshot_id": screenshot_id,
+        "element_id": element_id,
+        "description_index": description_index,
+        "description_style": _style_of(description_index),
+        "description": desc, "gt_bbox": gt_bbox,
+        "pred_bbox": None, "pred_point": None,
+        "iou": 0.0, "pass_iou": False, "pass_centroid": False,
+        "error": "", "latency_ms": 0,
+        "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
+        "cache_creation_input_tokens": 0, "raw": "",
+        "img_w": 0, "img_h": 0,
+        "input": "xml", "xpath": "", "xml_outcome": "", "xpath_matches": 0,
+    }
+
+    vt = trees.get(screenshot_id)
+    if vt is None:
+        return {**base, "error": "xml dump not found"}
+    base["img_w"], base["img_h"] = vt.width, vt.height
+
+    prefix, suffix = build_xml_prompt(desc, vt.filtered_xml)
+    if pacer:
+        pacer.wait()
+    content, latency_ms, error, meta = _call_model_text(
+        client, proxy_url, api_key, model, prefix, suffix, timeout,
+        max_tokens, temperature, api_flavor,
+        # The tree is what every request about this screenshot shares; see `_cache_routing`.
+        # `_build_text_payload` sends it as the system message, where OpenAI's cache can actually pick it up.
+        cache_key=screenshot_id)
+    base.update({
+        "latency_ms": round(latency_ms, 1),
+        "input_tokens": meta.get("input_tokens", 0),
+        "output_tokens": meta.get("output_tokens", 0),
+        "cached_input_tokens": meta.get("cached_input_tokens", 0),
+        "cache_creation_input_tokens": meta.get("cache_creation_input_tokens", 0),
+        "raw": meta.get("raw", ""),
+    })
+    if error:
+        base["error"] = error
+        return base
+
+    pred = xml_prediction(content, vt.tree, vt.width, vt.height)
+    pred_bbox = pred["pred_bbox"]
+    iou = _compute_iou(pred_bbox, gt_bbox) if pred_bbox else 0.0
+    pass_centroid = False
+    if pred_bbox:
+        cx = pred_bbox["x"] + pred_bbox["width"] / 2
+        cy = pred_bbox["y"] + pred_bbox["height"] / 2
+        pass_centroid = _point_inside_bbox(cx, cy, gt_bbox)
+    base.update({
+        "pred_bbox": pred_bbox,
+        "iou": round(iou, 4),
+        "pass_iou": iou >= IOU_THRESHOLD,
+        "pass_centroid": pass_centroid,
+        "xpath": pred["xpath"],
+        "xml_outcome": pred["xml_outcome"],
+        "xpath_matches": pred["xpath_matches"],
+    })
+    return base
+
 
 def run_benchmark(
     dataset: list,
@@ -181,21 +313,66 @@ def run_benchmark(
     coord_grid: int = -1,
     api_flavor: str = "proxy",
     prompt_style: str = "pixels",
+    input_mode: str = "screenshot",
+    xml_dir: str = "",
+    gt_boxes: dict = None,
+    rpm: int = 0,
+    max_requests: int = 0,
+    only_keys: set = None,
 ) -> dict:
+    """Score `dataset` under one model; see `cli/commands.py` for how the flags arrive.
+
+    `gt_boxes` is every labelled box on the screenshots being scored, keyed as
+    `gt_boxes_from_dataset` keys them. The caller passes it on a `--limit` run, where
+    `dataset` is the sampled subset: `_answer_classes` decides "chose another element" by
+    looking for *any* labelled element under the predicted centre, and a 200-element sample
+    spread over ~199 screenshots carries one box per screen, so every wrong answer read as
+    `empty_space` and `other_element` was 0 on both pilots. Absent, the subset's own boxes
+    are used, which is complete for a full run.
+
+    `rpm` and `max_requests` are the two cost controls, for a paid run spread over days
+    under an account's limits. `rpm` caps request starts per minute across all workers
+    (`RatePacer`); `max_requests` caps the model calls this invocation makes — the pairs
+    still to do are cut to that many, the rest wait for the next invocation. A capped run
+    ends as a stopped one does: `stopped_early`, a `-PARTIAL-` file, the checkpoint kept, so
+    the same command the next night carries on where this one left off. Both count model
+    calls, not HTTP attempts, and 0 means no cap.
+
+    `only_keys` (from `--only-from`) restricts the run to those (screenshot, element,
+    phrasing) keys — the rows an XML run did not answer. Everything else is a plain run on
+    a smaller work list: same prompt, same checkpoint, same scoring, so a later full run
+    reuses every row this one bought.
+    """
     pairs = _expand_pairs(dataset, description_indices)
+    if only_keys is not None:
+        before = len(pairs)
+        pairs = [(row, idx) for row, idx in pairs if (row["screenshot_id"], row["element_id"], idx) in only_keys]
+        logger.info("  --only-from: %d of %d pair(s) kept — the rows the XML run did not answer", len(pairs), before)
+        dataset = [row for row in dataset if any((row["screenshot_id"], row["element_id"], idx) in only_keys for idx in description_indices)]
     styles = ", ".join(_style_of(i) for i in description_indices)
-    logger.info("Benchmarking model=%s on %d element(s) x %d phrasing(s) [%s] = %d call(s), metric=%s", model, len(dataset), len(description_indices), styles, len(pairs), metric)
+    logger.info("Benchmarking model=%s on %d element(s) x %d phrasing(s) [%s] = %d call(s), metric=%s, input=%s", model, len(dataset), len(description_indices), styles, len(pairs), metric, input_mode)
     short = len(dataset) * len(description_indices) - len(pairs)
     if short:
         logger.info("  %d pair(s) skipped: the element has fewer descriptions than that",short)
 
+    xml = input_mode == "xml"
+    trees = ViewTreeStore(xml_dir) if xml else None
+    if xml:
+        # The coordinate prompt never goes out on this track, so the result must not claim one. Recorded as the prompt that did: the XPath template.
+        prompt_style = "xpath"
+        # Checked up front, whether or not this is a dry run: a missing dump is per screenshot, and finding out at a paid run is the expensive way.
+        sids = {row["screenshot_id"] for row in dataset}
+        missing = sorted(s for s in sids if not trees.path_for(s).exists())
+        if missing:
+            logger.warning("  %d of %d screenshot(s) have no XML dump in %s — their rows will error with 'xml dump not found'. First: %s",len(missing), len(sids), xml_dir, missing[0])
+        else:
+            logger.info("  XML dumps present for all %d screenshot(s) (%s)", len(sids), xml_dir)
+
     if dry_run:
         logger.info("Dry-run: skipping API calls")
-        return {"model": model, "dry_run": True,
-                "total_elements": len(pairs), "unique_elements": len(dataset),
-                "results": []}
+        return {"model": model, "dry_run": True, "total_elements": len(pairs), "unique_elements": len(dataset), "results": []}
 
-    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style)
+    ckpt = checkpoint.path_for(output_dir or ".", dataset_path, model, prompt_style, input_mode)
     if no_resume:
         ckpt.unlink(missing_ok=True)
 
@@ -208,31 +385,24 @@ def run_benchmark(
         if served_model:
             logger.info("  endpoint served: %s", served_model)
         if mismatch:
-            logger.warning(
-                "MODEL MISMATCH — asked for %r, the endpoint answered as %r. This "
-                "endpoint does not route by model name, so these results describe "
-                "whatever model is currently loaded, NOT %s. Load the model you want "
-                "(ssh to the host and restart the server with it) and re-run.",
+            logger.warning("MODEL MISMATCH — asked for %r, the endpoint answered as %r. This endpoint does not route by model name, so these results describe "
+                "whatever model is currently loaded, NOT %s. Load the model you want (ssh to the host and restart the server with it) and re-run.",
                 model, served_model, model)
         elif not served_model:
-            logger.warning("Could not determine which model the endpoint serves; "
-                           "results will not record it.")
+            logger.warning("Could not determine which model the endpoint serves; results will not record it.")
 
         # Decided here rather than in main() because the served id is only known after
         # the probe, and on a single-model endpoint that id is the one that decides the
         # convention — see `_coord_grid_for`.
         grid = _coord_grid_for(model, served_model, coord_grid)
         if grid:
-            logger.info("  coordinate grid: 0-%d (pixel-scale answers are divided by "
-                        "%d, not by the screenshot's dimensions)", grid, grid)
+            logger.info("  coordinate grid: 0-%d (pixel-scale answers are divided by %d, not by the screenshot's dimensions)", grid, grid)
 
         resumed, done, meta = checkpoint.read(ckpt)
         if resumed and meta.get("served_model", served_model) != served_model:
-            logger.error(
-                "Checkpoint %s was scored by %r but the endpoint now serves %r. "
-                "Resuming would blend two models into one score. Re-load that model, "
-                "or pass --no-resume to discard %d scored element(s) and start over.",
-                ckpt, meta.get("served_model"), served_model, len(done))
+            logger.error("Checkpoint %s was scored by %r but the endpoint now serves %r. Resuming would blend two models into one score."
+                         "Re-load that model, or pass --no-resume to discard %d scored element(s) and start over.",
+                         ckpt, meta.get("served_model"), served_model, len(done))
             sys.exit(1)
 
         # Same refusal, same reason, for the coordinate grid. Rows scored under two
@@ -245,9 +415,8 @@ def run_benchmark(
         if resumed and prior_grid is not None and prior_grid != grid:
             logger.error(
                 "Checkpoint %s was scored on coordinate grid %s but this run uses %s. "
-                "Resuming would put two coordinate conventions in one score and nothing "
-                "downstream could tell them apart. Pass --coord-grid %s to match it, or "
-                "--no-resume to discard %d scored pair(s) and start over.",
+                "Resuming would put two coordinate conventions in one score and nothing downstream could tell them apart."
+                "Pass --coord-grid %s to match it, or --no-resume to discard %d scored pair(s) and start over.",
                 ckpt, prior_grid or "pixel", grid or "pixel", prior_grid, len(done))
             sys.exit(1)
 
@@ -257,10 +426,18 @@ def run_benchmark(
         wanted = {(row["screenshot_id"], row["element_id"], idx) for row, idx in pairs}
         results = [r for r in resumed if checkpoint.key_of(r) in wanted]
         done &= wanted
-        todo = [(row, idx) for row, idx in pairs
-                if (row["screenshot_id"], row["element_id"], idx) not in done]
+        todo = [(row, idx) for row, idx in pairs if (row["screenshot_id"], row["element_id"], idx) not in done]
         if done:
             logger.info("  %d already scored, %d to go", len(results), len(todo))
+
+        # The per-invocation cap. Pairs are ordered screenshot-major, so the cut keeps every phrasing of the screenshots it does take and the cache prefix they share.
+        capped = 0 < max_requests < len(todo)
+        if capped:
+            logger.info("  --max-requests %d: scoring the next %d pair(s) this invocation, %d left for the next",max_requests, max_requests, len(todo) - max_requests)
+            todo = todo[:max_requests]
+        pacer = RatePacer(rpm) if rpm > 0 else None
+        if pacer:
+            logger.info("  --rpm %d: at most one request start every %.1fs across %d worker(s)", rpm, pacer.interval, workers)
 
         # max_tokens rides along for the same reason served_model does: --finalize-only
         # rebuilds a result from this header alone, and the honest value is the one the
@@ -278,25 +455,34 @@ def run_benchmark(
                 "workers": workers,
                 "temperature": temperature,
                 "prompt_style": prompt_style,
-                "coord_grid": grid}
+                "coord_grid": grid,
+                # Which track wrote these rows: --finalize-only rebuilds from this header alone, and the track changes what the rows mean.
+                "input": input_mode}
 
         futures = {}
         stopped_early = False
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for row, idx in todo:
-                f = pool.submit(
-                    _benchmark_element,
-                    client, proxy_url, api_key, model,
-                    row, images_dir, idx, timeout, coord_format,
-                    thinking_budget, max_image_dim, max_tokens, temperature,
-                    grid, api_flavor, prompt_style,
-                )
+                if xml:
+                    f = pool.submit(
+                        _benchmark_element_xml,
+                        client, proxy_url, api_key, model,
+                        row, idx, timeout, max_tokens, temperature, api_flavor,
+                        trees, pacer,
+                    )
+                else:
+                    f = pool.submit(
+                        _benchmark_element,
+                        client, proxy_url, api_key, model,
+                        row, images_dir, idx, timeout, coord_format,
+                        thinking_budget, max_image_dim, max_tokens, temperature,
+                        grid, api_flavor, prompt_style, pacer,
+                    )
                 futures[f] = (row, idx)
 
             with tqdm(total=len(futures), desc=f"{model}") as pbar:
                 for f in as_completed(futures):
-                    # Cancelled by the stop below. as_completed yields them straight
-                    # away and .result() would raise CancelledError.
+                    # Cancelled by the stop below. as_completed yields them straight away and .result() would raise CancelledError.
                     if f.cancelled():
                         pbar.update(1)
                         continue
@@ -307,17 +493,13 @@ def run_benchmark(
                         checkpoint.append(ckpt, meta, r)
                     pbar.update(1)
 
-                    # Cancel the queue but keep draining rather than breaking out:
-                    # the futures still running would otherwise finish into nothing,
-                    # losing up to `workers` elements from both the result and the
-                    # checkpoint. Cancelled ones come back immediately, so the loop
-                    # ends as soon as the last in-flight request lands.
+                    # Cancel the queue but keep draining rather than breaking out: the futures still running would otherwise finish into nothing,
+                    # losing up to `workers` elements from both the result and the checkpoint.
+                    # Cancelled ones come back immediately, so the loop ends as soon as the last in-flight request lands.
                     if _STOP.is_set() and not stopped_early:
                         stopped_early = True
                         cancelled = sum(1 for g in futures if g.cancel())
-                        logger.warning(
-                            "Stopping early — %d queued element(s) cancelled, "
-                            "waiting for the ones in flight", cancelled)
+                        logger.warning("Stopping early — %d queued element(s) cancelled, waiting for the ones in flight", cancelled)
 
     return build_result(
         results=results,
@@ -339,7 +521,9 @@ def run_benchmark(
         # a 3-phrasing run produces three rows per element. Counting elements here would
         # report a finished run as 300% complete.
         selected_elements=len(pairs),
-        stopped_early=stopped_early,
+        # A run cut short by --max-requests is as partial as a stopped one, and must look it: PARTIAL in the name, checkpoint kept, completed_fraction below 1.
+        stopped_early=stopped_early or capped,
         checkpoint_path=str(ckpt),
-        gt_boxes=gt_boxes_from_dataset(dataset),
+        gt_boxes=gt_boxes or gt_boxes_from_dataset(dataset),
+        input_mode=input_mode,
     )

@@ -32,8 +32,7 @@ def _list_loaded_models(client: httpx.Client, proxy_url: str, api_key: str,
                         api_flavor: str = "proxy") -> list:
     """Model ids the endpoint admits to having. Empty list if it won't say."""
     try:
-        resp = client.get(f"{proxy_url.rstrip('/')}/v1/models",
-                          headers=_auth_headers(api_flavor, api_key), timeout=15)
+        resp = client.get(f"{proxy_url.rstrip('/')}/v1/models", headers=_auth_headers(api_flavor, api_key), timeout=15)
         if resp.status_code != 200:
             return []
         return [m["id"] for m in resp.json().get("data", []) if m.get("id")]
@@ -42,8 +41,7 @@ def _list_loaded_models(client: httpx.Client, proxy_url: str, api_key: str,
         return []
 
 
-def _probe_served_model(client: httpx.Client, proxy_url: str, api_key: str,
-                        model: str, api_flavor: str = "proxy") -> str:
+def _probe_served_model(client: httpx.Client, proxy_url: str, api_key: str, model: str, api_flavor: str = "proxy") -> str:
     """Ask for `model` and report which model actually answers.
 
     A single-model server (llama.cpp serving one .gguf) does not route by name: it
@@ -63,8 +61,7 @@ def _probe_served_model(client: httpx.Client, proxy_url: str, api_key: str,
     # measured: `max_completion_tokens: 1` is a 400 on a current GPT model, 16 is a 200.
     # The probe only needs the response's `model` field, so the extra tokens cost nothing
     # worth counting once per run.
-    ping = {"model": model, "messages": [{"role": "user", "content": "ping"}],
-            _MAX_TOKENS_KEY.get(api_flavor, "max_tokens"): 16}
+    ping = {"model": model, "messages": [{"role": "user", "content": "ping"}], _MAX_TOKENS_KEY.get(api_flavor, "max_tokens"): 16}
     try:
         resp = client.post(
             _endpoint_url(api_flavor, proxy_url),
@@ -175,7 +172,7 @@ def _endpoint_url(flavor: str, base_url: str) -> str:
 def _build_payload(flavor: str, model: str, b64: str, media: str, description: str,
                    max_tokens: int, thinking_budget: int, temperature: float,
                    send_temperature: bool, prompt_style: str = "pixels",
-                   img_w: int = 0, img_h: int = 0) -> dict:
+                   img_w: int = 0, img_h: int = 0, cache_key: str = "") -> dict:
     """The request body, in whichever shape the endpoint expects.
 
     Anthropic takes the system prompt as a top-level `system` rather than a message, and
@@ -197,8 +194,10 @@ def _build_payload(flavor: str, model: str, b64: str, media: str, description: s
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "image", "source": {"type": "base64",
-                                                 "media_type": media, "data": b64}},
+                    # The breakpoint sits on the image, so everything up to and including it — system prompt and image,
+                    # identical for every request about one screenshot — is cached; only the description after it is new.
+                    # Verified on claude-opus-4-8: a screenshot's first request wrote 3,628 tokens, the second and third read back 3,628 of ~3,650.
+                    {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}, "cache_control": {"type": "ephemeral"}},
                     {"type": "text", "text": user_text},
                 ],
             }],
@@ -232,6 +231,7 @@ def _build_payload(flavor: str, model: str, b64: str, media: str, description: s
         # flag nobody thinks twice about into a 400 on all 10,307 elements.
         **({"budget_tokens": thinking_budget}
            if thinking_budget >= 0 and flavor == FLAVOR_PROXY else {}),
+        **_cache_routing(flavor, cache_key),
         **temp,
     }
 
@@ -257,9 +257,13 @@ def _extract_response(flavor: str, data: dict) -> tuple[str, dict, dict]:
         "completion_tokens": u.get("output_tokens", 0) or 0,
         # Anthropic reports cache reads separately and excludes them from input_tokens,
         # so add them back — otherwise a cached element looks cheaper than it was.
-        "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) or 0},
+        "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) or 0,
+                                  # Tokens written INTO the cache on this call, billed above the plain input rate — the first request about a screenshot pays
+                                  # it, the next ~37 read it back. Anthropic reports it apart from input_tokens too, so it is added back below as well.
+                                  "cache_creation_tokens": u.get("cache_creation_input_tokens", 0) or 0},
     }
     usage["prompt_tokens"] += usage["prompt_tokens_details"]["cached_tokens"]
+    usage["prompt_tokens"] += usage["prompt_tokens_details"]["cache_creation_tokens"]
     return ("length" if stop == "max_tokens" else stop), {"content": text}, usage
 
 
@@ -284,8 +288,145 @@ def _response_meta(usage: dict, msg: dict) -> dict:
         "input_tokens": usage.get("prompt_tokens", 0) or 0,
         "output_tokens": usage.get("completion_tokens", 0) or 0,
         "cached_input_tokens": details.get("cached_tokens", 0) or 0,
+        # Anthropic only; 0 elsewhere. Needed to price a run: a cache write costs more than plain input, so cached reads alone understate the first request on every screenshot.
+        "cache_creation_input_tokens": details.get("cache_creation_tokens", 0) or 0,
         "raw": text[:RAW_RESPONSE_CHARS] if RAW_RESPONSE_CHARS > 0 else text,
     }
+
+def _post_with_retries(client: httpx.Client, url: str, headers: dict, payload: dict,
+                       timeout: int) -> tuple[Optional[httpx.Response], float, str]:
+    """One request under the run's retry rules: `(response, latency_ms, error)`.
+
+    Three attempts with 2s/4s back-off on connection failures only; a timeout or any other
+    exception returns at once. Shared by the vision and XML tracks so the two cannot drift
+    on what counts as a transport error — which matters because transport errors are the
+    rows a resume retries, and an answer is not.
+    """
+    t0 = time.monotonic()
+    last_err = ""
+
+    def _post():
+        return client.post(url, json=payload, headers=headers, timeout=timeout)
+
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(2 ** attempt)  # 2s, 4s back-off
+        try:
+            resp = _post()
+            # A server that rejects `temperature` rejects it on every call, so drop it for  the whole run rather than burning
+            # a wasted round-trip per element. Retried inline rather than by `continue`, which would spend one of the three
+            # connection attempts and report "Connection failed" if this were the last.
+            if "temperature" in payload and _temperature_rejected(resp):
+                logger.warning("Endpoint rejected temperature=%s (HTTP %d): %s. Dropping it for the rest of the run and letting the model use its own sampling default. "
+                    "Coordinates are digit tokens, so a non-zero default can move a prediction between runs — see --temperature.",payload["temperature"], resp.status_code, resp.text[:160])
+                _TEMPERATURE_REJECTED.set()
+                payload.pop("temperature")
+                resp = _post()
+            return resp, (time.monotonic() - t0) * 1000, ""
+        except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_err = str(e)
+            logger.debug("Attempt %d failed: %s", attempt + 1, e)
+            continue
+        except httpx.TimeoutException:
+            return None, (time.monotonic() - t0) * 1000, "timeout"
+        except Exception as e:
+            return None, (time.monotonic() - t0) * 1000, str(e)
+    return None, (time.monotonic() - t0) * 1000, f"Connection failed after 3 attempts: {last_err}"
+
+
+def _cache_routing(flavor: str, cache_key: str) -> dict:
+    """OpenAI's `prompt_cache_key`, on the `openai` flavor only.
+
+    OpenAI routes a request to a cache machine by a hash of its first ~256 tokens, and
+    overflows to other machines when that route is busy. Every request this benchmark
+    sends opens with the same instructions, so *all* of them hash to one route — measured
+    on the XML pilot: 600 requests about ~199 screenshots, 0% cached, and three sequential
+    requests about one screenshot went hit / miss / miss. The key makes the route the
+    screenshot's, so the ~38 requests that share its tree or image land together. Sent to
+    OpenAI alone: vLLM and llama.cpp have their own caches and may reject the field, and
+    Anthropic caches by `cache_control` on the content instead.
+    """
+    return {"prompt_cache_key": cache_key} if (cache_key and flavor == FLAVOR_OPENAI) else {}
+
+
+def _build_text_payload(flavor: str, model: str, prefix: str, suffix: str, max_tokens: int, temperature: float, send_temperature: bool, cache_key: str = "") -> dict:
+    """A text-only request in two halves: the shared prefix, then the per-row suffix.
+
+    `prefix`/`suffix` are what `build_xml_prompt` returns — instructions plus tree, then the
+    description. The split is what lets each provider's cache see the shared half: on the
+    Messages API the prefix is its own block carrying `cache_control`; on the OpenAI shape it
+    goes out as the system message, for the reason measured below. A natural-language locator
+    sends the same words as a single user turn; the words are unchanged here, only the roles.
+    """
+    temp = ({"temperature": temperature} if send_temperature else {})
+    if flavor == FLAVOR_ANTHROPIC:
+        content = [{"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}]
+        if suffix:
+            content.append({"type": "text", "text": suffix})
+        return {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": content}], **temp}
+    # OpenAI's prompt cache stops at a message boundary. Measured on gpt-5.6-terra with a
+    # 1,927-token prompt: as ONE user message, two requests sharing all but the last ~20
+    # tokens cached 0; the identical request repeated cached 1,924. Split into
+    # `system` = shared prefix and `user` = the rest, the sibling request cached 1,917. So
+    # the shared half goes out as the system message — same words, two roles — and that is
+    # what makes the tree cacheable at all. An empty suffix falls back to one user turn.
+    if suffix:
+        messages = [{"role": "system", "content": prefix}, {"role": "user", "content": suffix}]
+    else:
+        messages = [{"role": "user", "content": prefix}]
+    return {
+        "model": model,
+        "messages": messages,
+        _MAX_TOKENS_KEY.get(flavor, "max_tokens"): max_tokens,
+        **_cache_routing(flavor, cache_key),
+        **temp,
+    }
+
+
+def _call_model_text(
+    client: httpx.Client,
+    proxy_url: str,
+    api_key: str,
+    model: str,
+    prefix: str,
+    suffix: str,
+    timeout: int,
+    max_tokens: int = 2048,
+    temperature: float = 0,
+    api_flavor: str = FLAVOR_PROXY,
+    cache_key: str = "",
+) -> tuple[str, float, str, dict]:
+    """One text-only request: `(content, latency_ms, error, meta)`.
+
+    The XML track's call. Unlike `_call_model` it does not parse — an XPath is not a box,
+    and turning it into one needs the tree, which lives with the caller
+    (`scoring/xpath.py:xml_prediction`). `content` is the model's reply exactly as
+    `_response_meta` records it in `raw`, so the runner and `--rescore` read one text.
+    The truncation and empty-content guards are the vision track's, for the same reasons.
+    """
+    payload = _build_text_payload(
+        api_flavor, model, prefix, suffix, max_tokens, temperature,
+        send_temperature=(temperature >= 0 and not _TEMPERATURE_REJECTED.is_set()),
+        cache_key=cache_key)
+    url = _endpoint_url(api_flavor, proxy_url)
+    headers = _auth_headers(api_flavor, api_key)
+
+    resp, latency_ms, err = _post_with_retries(client, url, headers, payload, timeout)
+    if resp is None:
+        return "", latency_ms, err, {}
+    try:
+        if resp.status_code != 200:
+            return "", latency_ms, f"HTTP {resp.status_code}: {resp.text[:200]}", {}
+        finish, msg, usage = _extract_response(api_flavor, resp.json())
+        meta = _response_meta(usage, msg)
+        if finish == "length":
+            return "", latency_ms, f"Truncated at max_tokens={max_tokens} (completion_tokens={meta['output_tokens']}): the answer never arrived. Thinking models need a larger cap — raise --max-tokens.", meta
+        if not meta["raw"]:
+            return "", latency_ms, f"Empty content (finish_reason={finish}, prompt_tokens={meta['input_tokens']}).", meta
+        return meta["raw"], latency_ms, "", meta
+    except Exception as e:
+        return "", latency_ms, str(e), {}
+
 
 def _call_model(
     client: httpx.Client,
@@ -303,6 +444,7 @@ def _call_model(
     coord_grid: int = 0,
     api_flavor: str = FLAVOR_PROXY,
     prompt_style: str = "pixels",
+    cache_key: str = "",
 ) -> tuple[Optional[dict], Optional[dict], float, str, dict]:
     """
     Returns (pred_bbox or None, pred_point or None, latency_ms, error, meta).
@@ -329,49 +471,15 @@ def _call_model(
         temperature,
         # Sent only where it is accepted — see _TEMPERATURE_REJECTED.
         send_temperature=(temperature >= 0 and not _TEMPERATURE_REJECTED.is_set()),
-        prompt_style=prompt_style, img_w=img_w, img_h=img_h,
+        prompt_style=prompt_style, img_w=img_w, img_h=img_h, cache_key=cache_key,
     )
     url = _endpoint_url(api_flavor, proxy_url)
     headers = _auth_headers(api_flavor, api_key)
 
     t0 = time.monotonic()
-    last_err = ""
-
-    def _post():
-        return client.post(url, json=payload, headers=headers, timeout=timeout)
-
-    for attempt in range(3):
-        if attempt > 0:
-            time.sleep(2 ** attempt)  # 2s, 4s back-off
-        try:
-            resp = _post()
-            # A server that rejects `temperature` rejects it on every call, so drop it for
-            # the whole run rather than burning a wasted round-trip per element. Retried
-            # inline rather than by `continue`, which would spend one of the three
-            # connection attempts and report "Connection failed" if this were the last.
-            if "temperature" in payload and _temperature_rejected(resp):
-                logger.warning(
-                    "Endpoint rejected temperature=%s (HTTP %d): %s. Dropping it for the "
-                    "rest of the run and letting the model use its own sampling default. "
-                    "Coordinates are digit tokens, so a non-zero default can move a "
-                    "prediction between runs — see --temperature.",
-                    payload["temperature"], resp.status_code, resp.text[:160])
-                _TEMPERATURE_REJECTED.set()
-                payload.pop("temperature")
-                resp = _post()
-            break
-        except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
-            last_err = str(e)
-            logger.debug("Attempt %d failed: %s", attempt + 1, e)
-            continue
-        except httpx.TimeoutException:
-            return None, None, (time.monotonic() - t0) * 1000, "timeout", dict(dims)
-        except Exception as e:
-            return None, None, (time.monotonic() - t0) * 1000, str(e), dict(dims)
-    else:
-        return None, None, (time.monotonic() - t0) * 1000, f"Connection failed after 3 attempts: {last_err}", dict(dims)
-
-    latency_ms = (time.monotonic() - t0) * 1000
+    resp, latency_ms, err = _post_with_retries(client, url, headers, payload, timeout)
+    if resp is None:
+        return None, None, latency_ms, err, dict(dims)
 
     try:
         if resp.status_code != 200:

@@ -3,7 +3,7 @@
 Separated from dispatch because the flags are the harness's public contract while what
 happens next is internal. The help text carries the reasoning for the non-obvious
 defaults (`--max-image-dim 0`, `--metric centroid`, `--description-index 0`,
-`--prompt-style pixels`), so read it before changing one — the README calls `--help`
+`--prompt-style pixels`, `--input screenshot`), so read it before changing one — the README calls `--help`
 the place every flag is listed.
 """
 import argparse
@@ -185,6 +185,43 @@ def build_parser() -> argparse.ArgumentParser:
                              "instruction can score 0%% under one and 100%% under the "
                              "other — so it is recorded in the result and checkpoints do "
                              "not cross between styles.")
+    parser.add_argument("--input", choices=["screenshot", "xml"], default="screenshot",
+                        help="What the model is shown. 'screenshot' (default) is the vision "
+                             "track: the image plus one description, a box back. 'xml' "
+                             "measures the other way to locate an element: the screen's "
+                             "accessibility tree, filtered of empty nodes and non-essential "
+                             "attributes, sent as text with no image; the model answers ONE "
+                             "XPath or NOT_FOUND. The XPath is run on the full tree, the "
+                             "first node's bounds become the predicted box, and the same "
+                             "centroid/IoU metrics apply. Every row records `xml_outcome` "
+                             "(answered / not_found / invalid_xpath / no_match) and none of "
+                             "those is an error, so a resume does not pay to ask again. "
+                             "Output files are named xml-<model>-… and the checkpoint is "
+                             "its own (-xml).")
+    parser.add_argument("--xml-dir", default=str(REPO_ROOT / "data" / "xml"), metavar="DIR",
+                        help="With --input xml: the UiAutomator dumps, one "
+                             "<screenshot_id>.xml per screenshot (default: the dumps this "
+                             "repository ships beside the screenshots). These cover the app "
+                             "window only — a tree read on a device also holds the "
+                             "keyboard window — so a key on the on-screen keyboard has no "
+                             "node here.")
+    parser.add_argument("--only-from", default="", metavar="XML_RESULT.json",
+                        help="Vision track only: score just the (element, phrasing) rows this "
+                             "--input xml result did not answer (NOT_FOUND, invalid XPath, no "
+                             "match), i.e. the rows a tree-then-screenshot cascade would send to "
+                             "vision. Same prompt, checkpoint and scoring as a full run; the "
+                             "output carries -ONLY-FROM-xml in its name and records the source.")
+    parser.add_argument("--rpm", type=int, default=0, metavar="N",
+                        help="Cap request starts at N per minute across all workers "
+                             "(0 = no cap). For a paid endpoint shared with other users: "
+                             "keeps the run under the account's per-minute limit instead "
+                             "of taking all of it.")
+    parser.add_argument("--max-requests", type=int, default=0, metavar="N",
+                        help="Make at most N model calls in this invocation, then write a "
+                             "PARTIAL result and keep the checkpoint (0 = no cap). The same "
+                             "command run again carries on from there, so a large paid run "
+                             "can be spread over nights under a daily spend limit. Counts "
+                             "(element, phrasing) pairs, not elements — unlike --limit.")
     parser.add_argument("--output-dir", default=str(REPO_ROOT / "benchmark-results"),
                         help="Where result JSON files and resume checkpoints go "
                              "(default: benchmark-results/)")

@@ -17,11 +17,12 @@ downwards only**:
 ```
 benchmark/
 ├── run_vision_benchmark.py   entry point — puts the repo root on sys.path, calls cli.commands
+├── score_cascade.py          joins an xml-… and a vision-… result into the tree-then-screenshot cascade
 ├── cli/         args.py (every flag) · commands.py (dispatch)
-├── engine/      runner.py — thread pool, per-element step, stop handling
-├── artifacts/   checkpoint.py · builder.py (build_result) · rescoring.py
-├── model/       prompts.py · images.py · client.py — the system under test
-├── scoring/     coords.py · parsing.py · metrics.py — what an answer means
+├── engine/      runner.py — thread pool, per-element step, rate pacing, stop handling
+├── artifacts/   checkpoint.py · builder.py (build_result) · rescoring.py · cascade.py (the cascade rules)
+├── model/       prompts.py · images.py · client.py · xml_tree.py — the system under test, on either input
+├── scoring/     coords.py · parsing.py · metrics.py · xpath.py — what an answer means
 └── workload/    dataset.py · phrasings.py · sampling.py — what gets scored
 ```
 
@@ -60,10 +61,10 @@ came back with a bounding box at all — and it factors the IoU exactly:
 iou_accuracy = bbox_coverage x iou_accuracy_given_bbox
 ```
 
-| | centroid | bbox_coverage | IoU given a box | = IoU |
-|---|---|---|---|---|
-| GUI-Owl 1.5 8B | **87.8%** | **15.1%** | 19.4% | 2.9% |
-| Qwen2.5-VL | 85.2% | **100%** | 49.2% | 49.2% |
+|                | centroid  | bbox_coverage | IoU given a box | = IoU |
+|----------------|-----------|---------------|-----------------|-------|
+| GUI-Owl 1.5 8B | **87.8%** | **15.1%**     | 19.4%           | 2.9%  |
+| Qwen2.5-VL     | 85.2%     | **100%**      | 49.2%           | 49.2% |
 
 Read left to right that is one sentence: GUI-Owl finds the element slightly more often, and supplies
 the box in one request out of seven. **Where the consumer requires a bounding box, coverage is a gate
@@ -105,31 +106,36 @@ not the requested one, is the fact that decides how its answers must be read.
 
 ## All arguments
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--dataset` | `data/dataset-v1.jsonl` | Path to the labelled dataset |
-| `--images-dir` | `data/images` | Directory of screenshots |
-| `--base-url` | `$BASE_URL` or `http://localhost:8080` | Base URL of an OpenAI-compatible server. `--proxy-url` is an alias |
-| `--api-key` | `$API_KEY`, else empty | On the default flavor, sent as both `Authorization: Bearer` and `X-API-Key`; omitted entirely when empty |
-| `--api-flavor` | `proxy` | Which dialect the endpoint speaks: `proxy`, `openai` or `anthropic`. **Never inferred from the URL** — see below |
-| `--prompt-style` | `pixels` | How coordinates are asked for: `pixels` (states the image size, asks for integers) or `normalized` (floats in [0,1]). Changes the score more than anything else here — see below |
-| `--model` | `qwen2.5-vl` | Model name(s) — space-separated for several |
-| `--metric` | `centroid` | Primary metric: `centroid` or `iou` |
-| `--workers` | `3` | Concurrent requests |
-| `--description-index` | `0` | Which phrasing(s) to ask: `0`=name, `1`=label, `2`=intent. Takes several — `0 1 2` scores every element under all three |
-| `--timeout` | `120` | Per-request timeout in seconds; thinking models need 120s+ |
-| `--coord-format` | `corner` | How to read `(x, y)`: `corner` = top-left, `center` = element centre |
-| `--thinking-budget` | `-1` | `budget_tokens` for CoT models; `0` disables thinking, `-1` leaves the model default. Sent on `--api-flavor proxy` only |
-| `--max-image-dim` | `0` | `0` sends the original. **Not a benchmark setting** — see below |
-| `--max-tokens` | `2048` | Output cap. A truncated answer is recorded as an error, not a bbox |
-| `--temperature` | `0` | Greedy, so a coordinate is reproducible. `-1` sends none |
-| `--limit` | `0` | Score at most N **elements**, spread evenly across the dataset. Deterministic |
-| `--coord-grid` | `-1` | Divide pixel-scale answers by N on both axes. `-1` picks it per model from `COORD_GRIDS`; `0` forces the screenshot's own pixels |
-| `--no-resume` | off | Discard the checkpoint and score everything again |
-| `--finalize-only` | off | Write a `PARTIAL` result from the existing checkpoint and exit — calls no model |
-| `--rescore` | — | Re-score a finished result file from its own `raw` text and exit. Calls no model |
-| `--output-dir` | `benchmark-results/` | Where result JSON files go |
-| `--dry-run` | off | Validate the dataset without calling the API |
+| Argument              | Default                                | Description                                                                                                                                                                                                                                                  |
+|-----------------------|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--dataset`           | `data/dataset-v1.jsonl`                | Path to the labelled dataset                                                                                                                                                                                                                                 |
+| `--images-dir`        | `data/images`                          | Directory of screenshots                                                                                                                                                                                                                                     |
+| `--base-url`          | `$BASE_URL` or `http://localhost:8080` | Base URL of an OpenAI-compatible server. `--proxy-url` is an alias                                                                                                                                                                                           |
+| `--api-key`           | `$API_KEY`, else empty                 | On the default flavor, sent as both `Authorization: Bearer` and `X-API-Key`; omitted entirely when empty                                                                                                                                                     |
+| `--api-flavor`        | `proxy`                                | Which dialect the endpoint speaks: `proxy`, `openai` or `anthropic`. **Never inferred from the URL** — see below                                                                                                                                             |
+| `--prompt-style`      | `pixels`                               | How coordinates are asked for: `pixels` (states the image size, asks for integers) or `normalized` (floats in [0,1]). Changes the score more than anything else here — see below                                                                             |
+| `--model`             | `qwen2.5-vl`                           | Model name(s) — space-separated for several                                                                                                                                                                                                                  |
+| `--metric`            | `centroid`                             | Primary metric: `centroid` or `iou`                                                                                                                                                                                                                          |
+| `--workers`           | `3`                                    | Concurrent requests                                                                                                                                                                                                                                          |
+| `--description-index` | `0`                                    | Which phrasing(s) to ask: `0`=name, `1`=label, `2`=intent. Takes several — `0 1 2` scores every element under all three                                                                                                                                      |
+| `--timeout`           | `120`                                  | Per-request timeout in seconds; thinking models need 120s+                                                                                                                                                                                                   |
+| `--coord-format`      | `corner`                               | How to read `(x, y)`: `corner` = top-left, `center` = element centre                                                                                                                                                                                         |
+| `--thinking-budget`   | `-1`                                   | `budget_tokens` for CoT models; `0` disables thinking, `-1` leaves the model default. Sent on `--api-flavor proxy` only                                                                                                                                      |
+| `--max-image-dim`     | `0`                                    | `0` sends the original. **Not a benchmark setting** — see below                                                                                                                                                                                              |
+| `--max-tokens`        | `2048`                                 | Output cap. A truncated answer is recorded as an error, not a bbox                                                                                                                                                                                           |
+| `--temperature`       | `0`                                    | Greedy, so a coordinate is reproducible. `-1` sends none                                                                                                                                                                                                     |
+| `--limit`             | `0`                                    | Score at most N **elements**, spread evenly across the dataset. Deterministic                                                                                                                                                                                |
+| `--coord-grid`        | `-1`                                   | Divide pixel-scale answers by N on both axes. `-1` picks it per model from `COORD_GRIDS`; `0` forces the screenshot's own pixels                                                                                                                             |
+| `--no-resume`         | off                                    | Discard the checkpoint and score everything again                                                                                                                                                                                                            |
+| `--finalize-only`     | off                                    | Write a `PARTIAL` result from the existing checkpoint and exit — calls no model                                                                                                                                                                              |
+| `--rescore`           | —                                      | Re-score a finished result file from its own `raw` text and exit. Calls no model                                                                                                                                                                             |
+| `--input`             | `screenshot`                           | What the model is shown. `screenshot` is the vision track. `xml` is the tree track: the accessibility tree, filtered, sent as text with no image; the model answers one XPath or `NOT_FOUND`. Output files are `xml-…`, the checkpoint is its own. See below |
+| `--xml-dir`           | `data/xml`                             | With `--input xml`: the UiAutomator dumps, `<screenshot_id>.xml`. App window only — a tree read on a device also has the keyboard                                                                                                                            |
+| `--only-from`         | —                                      | Vision track only: score just the rows this `--input xml` result did not answer (`NOT_FOUND`, invalid XPath, no match), the rows a tree-then-screenshot cascade sends to vision. Output gains `-ONLY-FROM-xml` and records the source. See below             |
+| `--rpm`               | `0`                                    | Cap request starts at N per minute across all workers (`0` = none). Keeps a paid run under the account's per-minute limit, which other users share. See below                                                                                                |
+| `--max-requests`      | `0`                                    | Make at most N model calls this invocation, then write a `PARTIAL` result and keep the checkpoint (`0` = none). Counts (element, phrasing) pairs, unlike `--limit`. Re-run the same command to carry on. See below                                           |
+| `--output-dir`        | `benchmark-results/`                   | Where result JSON files go                                                                                                                                                                                                                                   |
+| `--dry-run`           | off                                    | Validate the dataset without calling the API                                                                                                                                                                                                                 |
 
 Path defaults are anchored on the repository root, so `python benchmark/run_vision_benchmark.py`
 works from anywhere in the tree.
@@ -140,17 +146,22 @@ Everything that makes a number mean something other than "this model, this datas
 in the name, because a results directory is read as a list of filenames:
 
 ```
-vision-<model>[-Nphrasing][-SERVED-<x>][-PARTIAL][-PILOT-<n>]-GT-<dataset>-<timestamp>.json
+vision-<model>[-Nphrasing][-SERVED-<x>][-PARTIAL][-PILOT-<n>][-ONLY-FROM-xml]-GT-<dataset>-<timestamp>.json
+xml-<model>[-Nphrasing][-SERVED-<x>][-PARTIAL][-PILOT-<n>]-GT-<dataset>-<timestamp>.json
 ```
 
-| infix | when |
-|---|---|
-| `-Nphrasing` | more than one `--description-index`; the headline averages them |
-| `-SERVED-<x>` | the endpoint answered as a different model than `--model` asked for |
-| `-PARTIAL` | the run was stopped or rebuilt with `--finalize-only` |
-| `-PILOT-<n>` | `--limit` cut the run short of the dataset; `n` is how many elements it covers |
-| `-RESCORED` | written by `--rescore`, from an existing file's own answers |
-| `-GT-<dataset>` | **always** — which ground truth the score is against |
+The prefix is the strategy: `vision-` for a screenshot run, `xml-` for a tree run (`--input xml`).
+Everything after it is spelled the same way, so the two never sort into each other.
+
+| infix            | when                                                                                                     |
+|------------------|----------------------------------------------------------------------------------------------------------|
+| `-Nphrasing`     | more than one `--description-index`; the headline averages them                                          |
+| `-SERVED-<x>`    | the endpoint answered as a different model than `--model` asked for                                      |
+| `-PARTIAL`       | the run was stopped or rebuilt with `--finalize-only`                                                    |
+| `-PILOT-<n>`     | `--limit` cut the run short of the dataset; `n` is how many elements it covers                           |
+| `-ONLY-FROM-xml` | `--only-from` restricted the run to the rows an XML result did not answer — not a sample, the hard third |
+| `-RESCORED`      | written by `--rescore`, from an existing file's own answers                                              |
+| `-GT-<dataset>`  | **always** — which ground truth the score is against                                                     |
 
 `-GT-` is unconditional because there is no single obvious ground truth to stay quiet about:
 `--dataset` points at the shipped corpus by default but at whatever you labelled yourself the
@@ -161,11 +172,11 @@ last thing in the name and a listing sorted by it stays sorted by when the model
 
 ## `--api-flavor` — three dialects, chosen explicitly
 
-| flavor | endpoint | path | auth | output cap |
-|---|---|---|---|---|
-| `proxy` (default) | vLLM, llama.cpp, Ollama, gateways | `/v1/chat/completions` | `Bearer` **and** `X-API-Key` | `max_tokens` |
-| `openai` | api.openai.com | `/v1/chat/completions` | `Bearer` | `max_completion_tokens` |
-| `anthropic` | api.anthropic.com | `/v1/messages` | `x-api-key` + `anthropic-version` | `max_tokens` |
+| flavor            | endpoint                          | path                   | auth                              | output cap              |
+|-------------------|-----------------------------------|------------------------|-----------------------------------|-------------------------|
+| `proxy` (default) | vLLM, llama.cpp, Ollama, gateways | `/v1/chat/completions` | `Bearer` **and** `X-API-Key`      | `max_tokens`            |
+| `openai`          | api.openai.com                    | `/v1/chat/completions` | `Bearer`                          | `max_completion_tokens` |
+| `anthropic`       | api.anthropic.com                 | `/v1/messages`         | `x-api-key` + `anthropic-version` | `max_tokens`            |
 
 **It is never inferred from the URL.** The same base URL can front either shape, and a wrong guess
 fails per element in a way that reads like a model problem rather than a config one. The default
@@ -209,20 +220,20 @@ comparable.
 
 Two wordings of the same request, both in `model/prompts.py`:
 
-| style | asks for | states image size |
-|---|---|---|
-| `pixels` (default) | integers in the screenshot's own pixels | yes |
-| `normalized` | floats in `[0,1]` | no |
+| style              | asks for                                | states image size |
+|--------------------|-----------------------------------------|-------------------|
+| `pixels` (default) | integers in the screenshot's own pixels | yes               |
+| `normalized`       | floats in `[0,1]`                       | no                |
 
 The harness used to ask for floats and state no size. That is a fine request for a model that
 ignores it — Qwen2.5-VL answers in pixels regardless, 5 of 6 raws on a pilot, and the parser
 rescales — and a ruinous one for a model that obeys.
 
-| 10-element control, one frontier model | centroid | median `dy` | median `dx` | box height vs GT |
-|---|---|---|---|---|
-| `normalized` — floats, no image size | **0/10** | +0.0988 | +0.0256 | 1.41× |
-| `normalized` + the one `IMAGE SIZE` line | 4/10 | +0.0124 | +0.0256 | — |
-| `pixels` — integers, image size stated | **10/10** | +0.0025 | +0.0002 | 0.82× |
+| 10-element control, one frontier model   | centroid  | median `dy` | median `dx` | box height vs GT |
+|------------------------------------------|-----------|-------------|-------------|------------------|
+| `normalized` — floats, no image size     | **0/10**  | +0.0988     | +0.0256     | 1.41×            |
+| `normalized` + the one `IMAGE SIZE` line | 4/10      | +0.0124     | +0.0256     | —                |
+| `pixels` — integers, image size stated   | **10/10** | +0.0025     | +0.0002     | 0.82×            |
 
 Read the `dx` column against the `dy` one: stating the size fixes most of the *vertical* error and
 does not touch the *horizontal* one at all; asking for integers fixes both.
@@ -232,10 +243,10 @@ measurement. So the same model was re-run over **200 elements × 3 phrasings = 6
 against `data/dataset-v1-gpt-5.6.jsonl` — the second labelling, so the model is not scored on its
 own output — changing nothing but the coordinate format:
 
-| same 200 elements, same ground truth | centroid | IoU ≥ 0.5 | mean IoU | median `dy` | box height vs GT |
-|---|---|---|---|---|---|
-| `normalized` | 7.79% | 2.27% | 0.047 | +0.0816 | 1.69× |
-| `pixels` | **90.33%** | **61.67%** | **0.547** | +0.0004 | 0.99× |
+| same 200 elements, same ground truth | centroid   | IoU ≥ 0.5  | mean IoU  | median `dy` | box height vs GT |
+|--------------------------------------|------------|------------|-----------|-------------|------------------|
+| `normalized`                         | 7.79%      | 2.27%      | 0.047     | +0.0816     | 1.69×            |
+| `pixels`                             | **90.33%** | **61.67%** | **0.547** | +0.0004     | 0.99×            |
 
 No errors, and a bounding box on 100% of requests, in **both** runs. The model was answering every
 time; under one prompt it was answering in a frame it had never been given.
@@ -344,6 +355,31 @@ the dataset, so a run stopped at 12% looks exactly as confident as one that fini
 
 A partial run's checkpoint is always kept, so re-running carries on rather than paying twice.
 
+### Pacing a paid run — `--rpm` and `--max-requests`
+
+A full run over the human ground truth is 31,704 requests on the vision track and the same again on the XML track.
+Against a paid endpoint that is two separate problems, and the two flags answer one each:
+
+- **The account's per-minute limit is shared with everyone else using it.** `--workers 5` sends as fast as the endpoint answers,
+  which on a hosted API is fast enough to take the whole limit and hand everyone else `429`s, including this run's own retries.
+ `--rpm 60` spaces request *starts* at least one second apart across all workers — a ceiling, not an average, so there is no burst. 
+  Retries inside a request are not paced; they are the endpoint already saying wait, and an `--rpm` under the limit is what keeps them rare.
+- **The account's spend limit is per day or per month.** `--max-requests 3000` makes at most that many model calls, then ends the way a Ctrl+C does: 
+  a `-PARTIAL-` result, the checkpoint kept, `completed_fraction` below 1. The same command the next night resumes and scores the next 3,000.
+  Nothing is bought twice, and the nightly number is the one the budget owner set, not an element count that multiplies by the phrasings behind their back.
+
+```bash
+# every night, the same line, until a run ends without -PARTIAL-
+python benchmark/run_vision_benchmark.py --input xml --model gpt-5.6-terra --api-flavor openai \
+    --base-url https://api.openai.com --api-key "$OPENAI_API_KEY" \
+    --dataset data/dataset-v1-human-gpt.jsonl \
+    --description-index 0 1 2 --workers 5 --rpm 60 --max-requests 3000
+```
+
+Pairs are ordered screenshot-major, so a cut after N requests keeps every phrasing of the screenshots it took and the cached prefix they share.
+Neither flag changes the score: a run done in ten capped invocations and one done in a single sitting produce the same rows, only the last file's name differs. 
+Neither counts HTTP attempts, and `0` means no cap.
+
 ### Recovering a run that was killed outright
 
 A crash, an OOM kill or a Ctrl+C that reaches the whole process group leaves the checkpoint but no
@@ -373,10 +409,10 @@ Qwen2.5-VL answers in the screenshot's pixels. **GUI-Owl answers on a 0–1000 g
 Qwen-VL-family model and inherits that convention. Reading its grid values as pixels shrinks x by
 1.08× and y by 2.4×, which produced this:
 
-| GUI-Owl, 30,921 answers | centroid | IoU≥0.5 |
-|---|---|---|
-| as recorded (read as pixels) | **10.56%** | 0.95% |
-| re-scored on the 0–1000 grid | **87.80%** | 2.93% |
+| GUI-Owl, 30,921 answers      | centroid   | IoU≥0.5 |
+|------------------------------|------------|---------|
+| as recorded (read as pixels) | **10.56%** | 0.95%   |
+| re-scored on the 0–1000 grid | **87.80%** | 2.93%   |
 
 Nothing in that run looked wrong: 30,921 rows, 4 errors, every answer short and well-formed,
 `clamped_pred_count` at 0.6%. The run was clean and the number it reported was a property of the
@@ -463,6 +499,173 @@ Re-scoring the same `raw` proves which one moved.
 Proof the path is faithful: re-scoring the Qwen2.5-VL run with the pixel reading it already used
 moved **0 of 30,921 predictions** and reproduced every figure exactly (centroid 85.19% → 85.19%, IoU
 49.19% → 49.19%). Worth repeating after any parser change.
+
+---
+
+## `--input xml` — the XML track
+
+A natural-language locator can find an element two ways. Everything above this section measures the first: show the model the screenshot, get a box.
+The second never looks at the image: the screen's accessibility tree is filtered, sent as text with the description, and the model returns **one XPath or `NOT_FOUND`**, which a WebDriver client then runs on the device. 
+`--input xml` measures how well a model does that, on the same elements, the same descriptions and the same ground truth:
+
+```bash
+python benchmark/run_vision_benchmark.py --input xml \
+    --base-url http://localhost:8000 --model qwen2.5-vl \
+    --dataset data/dataset-v1-human-gpt.jsonl --description-index 0 1 2 --limit 200
+```
+
+The dumps are shipped: `data/xml/<screenshot_id>.xml`, one per screenshot, the default `--xml-dir`.
+A text model is enough — the screenshot is never opened — so a model with no vision at all can be scored on this track.
+
+What one request is:
+
+1. The screenshot's dump is filtered (`benchmark/model/xml_tree.py`): leaf nodes with no `text` / `content-desc` / `resource-id` / `hint` go, over-deep branches go,
+   every attribute outside the essential set (identifiers, text, state, bounds) goes. Invisible nodes stay.
+2. The filtered tree and the description are formatted into the Android XPath prompt and sent as text with **no image**.
+3. The reply is stripped of a code fence or backticks, then run as XPath 1.0 against the **full** dump (`lxml`; a driver runs it on the live tree, which knows nothing of the filter).
+   The **first** matching node is taken, as a driver's find-element takes it.
+4. That node's `bounds` become `pred_bbox`, and the centroid and IoU metrics apply unchanged. `xpath` is in the file beside `raw`.
+
+Every row records `xml_outcome`, and **none of these four is an `error`** — they are what the model answered, and a resume must not pay to ask again:
+
+| `xml_outcome`   | meaning                                              | `answer_class`        |
+|-----------------|------------------------------------------------------|-----------------------|
+| `answered`      | the XPath selected ≥ 1 node; graded on the first one | by geometry, as usual |
+| `not_found`     | the model said `NOT_FOUND`                           | `declined`            |
+| `invalid_xpath` | the text does not compile as XPath 1.0               | `non_answer`          |
+| `no_match`      | valid XPath, zero nodes on this tree                 | `non_answer`          |
+
+`summary.xml_outcomes` counts them — `answered_correct` / `answered_incorrect` by the centroid rule,
+the three not-answered kinds separately and summed as `not_answered` — per file and per phrasing.
+Those are the buckets an XML-then-vision cascade is counted in: everything but `answered` falls through to vision.
+
+Two things about the input are worth knowing, and both are in the file:
+
+- **The tree.** A locator running on a device reads every window on screen except the system
+  bars, so the on-screen keyboard is part of its tree. The dumps here are the UiAutomator page
+  source captured beside each screenshot and cover the app window only. Same attribute vocabulary,
+  not the same bytes: a key on the keyboard has no node here and would on a device, so about
+  1,700 of the 10,568 human-ground-truth elements will come back `not_found` for a reason that is
+  the data's, not the model's. Report them as such.
+- **The prompt order.** The prompt's original layout puts the description *before* the tree.
+  Under that order no two requests share more than the ~900-token instructions, which is below
+  OpenAI's 1,024-token caching floor, so the 3k–26k-token tree is paid for on every one of the ~38
+  requests about a screenshot. This track sends the tree first and the description last, and
+  changes no other character. The swap was checked before it became the only order: on a
+  200-element × 3-phrasing pilot the two layouts gave the same verdict on 97.5% of rows (58.0%
+  right / 10.8% wrong / 31.0% `NOT_FOUND` tree-first against 57.5 / 11.0 / 31.2 for the original),
+  with 70% of input cached against 0%. A flag for the original order existed for that pilot and
+  was removed once it had answered — a control, not a configuration, the same rule that retired
+  the `normalized-dims` prompt style. To reproduce it, swap the two trailing sections in
+  `build_xml_prompt` and send them as one user message.
+
+  Two more things were needed before OpenAI actually cached anything, both measured on a current
+  GPT model and both applied automatically: the shared half goes out as the **system message**
+  and the description as the user message, because the cache stops at a message boundary (as one
+  user message, sibling requests cached 0 of 1,927 tokens; split, they cached 1,917); and every
+  request carries `prompt_cache_key = screenshot_id`, because OpenAI routes by the first ~256
+  tokens and every request here opens with the same instructions, so without the key they all
+  queue on one route and overflow to cold machines. Through the real call path a screenshot's
+  second and third requests then cache 3,530 of 3,545 tokens.
+
+  On Anthropic the shared half is a content block carrying `cache_control` instead; nothing else
+  is needed. Verified on a 50-element pilot: all 150 requests either wrote the cache or read it
+  (first request about a screenshot writes, the rest read; two workers starting the same
+  screenshot together both write), none paid the plain rate. Cache writes are billed above the
+  plain rate, so each row also records `cache_creation_input_tokens` and the summary sums it as
+  `total_cache_creation_input_tokens` — read both before pricing an Anthropic run. The vision
+  track marks its image block the same way, so on Anthropic every request about a screenshot
+  after the first reads the system prompt and image from cache.
+
+Operational notes:
+
+- Output is `xml-<model>-…json`, never `vision-…`, so the two strategies cannot be confused in a listing. The checkpoint is `…-<model>-xml.partial.jsonl`, separate from any vision run.
+- `prompt_style` is recorded as `xpath`: the coordinate prompt never goes out on this track.
+- `--rescore <xml-result>` re-runs every XPath from `raw` against the dumps in `--xml-dir` and must reproduce the file exactly.
+  If the dumps are not where `--xml-dir` points, the boxes are kept and only re-graded, which is all `--rescore-gt` needs.
+- `--dry-run` reports whether every screenshot in the dataset has a dump before anything is spent.
+- Text requests on all three `--api-flavor`s; `--max-image-dim`, `--coord-grid`, `--coord-format` and `--prompt-style` are ignored on this track.
+
+---
+
+## `--only-from` — vision only where the tree gave nothing
+
+The cascade below needs a vision answer only for the rows XML did not answer. A model that already has a full vision run on the dataset needs nothing more.
+One that does not can buy just those rows:
+
+```bash
+python benchmark/run_vision_benchmark.py --model gpt-5.6-terra --api-flavor openai \
+    --base-url https://api.openai.com --api-key "$OPENAI_API_KEY" \
+    --dataset data/dataset-v1-human-gpt.jsonl --description-index 0 1 2 \
+    --only-from benchmark-results/xml-gpt-5.6-terra-3phrasing-GT-v1-human-gpt-….json
+```
+
+- The rows kept are the XML file's `NOT_FOUND`, invalid-XPath and no-match rows, by
+  (screenshot, element, phrasing). Rows that ended in a transport error on the XML side are
+  skipped and counted: they are not fall-through until the XML run retries them.
+- Everything else is an ordinary vision run — same prompt, same checkpoint as a full run of
+  that model, same scoring — so a full run later reuses every row this one paid for.
+- The result is **not** a vision benchmark of the model: its rows are the ones the tree
+  could not place, the hard third. The filename carries `-ONLY-FROM-xml`, and the JSON
+  records `only_from` (the source file) and `only_from_rows`. Feed it to `score_cascade.py`;
+  do not put its accuracy in a vision table.
+- Refused with `--input xml`: on that track "the rows XML did not answer" is the output.
+
+---
+
+## `score_cascade.py` — tree first, screenshot as the fallback
+
+A locator can try the tree first and show the model the screenshot only when the tree yields nothing. 
+Neither track measures that on its own, and no new request is needed to measure it: both halves have already been scored,
+so the cascade is a join of an `xml-…` file and a `vision-…` file on (screenshot, element, phrasing) and a re-count.
+
+```bash
+python benchmark/score_cascade.py \
+    benchmark-results/xml-gpt-5.6-terra-3phrasing-GT-v1-human-gpt-….json \
+    benchmark-results/vision-gpt-5.6-terra-3phrasing-ONLY-FROM-xml-GT-v1-human-gpt-….json \
+    --source gpt --json benchmark-results/cascade-gpt-5.6-terra.json
+```
+
+Files come in pairs — XML result, then vision result — and several pairs can be given at once, one block of output per pair. 
+The block is a Markdown table with eight lines, overall and per phrasing:
+
+| # | Line                        | Rule                                                                                                     |
+|---|-----------------------------|----------------------------------------------------------------------------------------------------------|
+| 1 | XML answered correctly      | XPath resolved; centre of the first node's bounds inside the ground-truth box                            |
+| 2 | XML answered incorrectly    | XPath resolved to a node whose centre is outside                                                         |
+| 3 | XML not answered → vision   | `NOT_FOUND`, an XPath that does not compile, or one that matches no node. Sub-lines give the three apart |
+| 4 | Vision answered correctly   | rows from 3; the vision box's centre is inside                                                           |
+| 5 | Vision answered incorrectly | rows from 3; a box, centre outside                                                                       |
+| 6 | Vision not answered         | rows from 3; no box. Sub-lines: declined vs. parse failure or error                                      |
+| 7 | Correct overall             | 1 + 4                                                                                                    |
+| 8 | Incorrect overall           | 2 + 5 + 6                                                                                                |
+
+Both halves are judged by the **centroid** rule whatever `--metric` either run used, the same way `summary.xml_outcomes` already counts the XML side. 
+Note what the rule implies: a *wrong* XPath is final — the fallback fires on "not answered", never on "answered wrongly",
+so the cascade can score below the screenshot strategy alone, and on a pilot it did.
+
+What the population is, and is not:
+
+- **Every XML row, minus transport errors.** An error is what a resume retries, not an outcome; the count is printed.
+- **The vision file only has to cover the fall-through rows.** A row XML answered never
+  consults the vision side, so a vision run made only where XML gave nothing (`--only-from`)
+  and a full vision run score the cascade identically and print the same block. A
+  fall-through row with no vision partner cannot be placed in lines 4–6 and is excluded; that
+  count is printed too and should be 0 for either kind of file.
+- `--source gpt` keeps one labelling's element ids, the split `summary.by_source` makes.
+- `--with-vision-alone` adds one line under the table, the screenshot strategy on its own
+  over the same rows. Available only when the vision file is a full run; it is not one of
+  the eight lines, so it is off by default.
+
+Footnotes the block prints when they apply:
+
+- How many rows describe a key on the on-screen keyboard, and how many of those fell through.
+  The XML dumps here hold the application window only, so a keyboard key is never in the tree;
+  that part of line 3 is a limit of the data, not of the strategy. Word-pattern heuristic.
+- Whether the vision file's prompt lets the model decline. Under `--prompt-style pixels` it does not, so line 6 holds only parse failures and errors, never a "not found".
+- Whether the two halves come from different models.
+
+`--json` writes the same numbers, one object per pair, for tables and further analysis.
 
 ---
 
@@ -695,6 +898,7 @@ the sample size.
     "total_input_tokens": 109799005, "total_output_tokens": 607624,
     "avg_input_tokens": 3551.0, "avg_output_tokens": 19.7,
     "total_cached_input_tokens": 16386, "cached_input_fraction": 0.2213,
+    "total_cache_creation_input_tokens": 0,
     "p95_output_tokens": 23,
     "elements_with_token_counts": 30921,
     "error_count": 0, "timeout_count": 0,
@@ -787,4 +991,15 @@ Two per-row fields exist so a result can be re-scored later without the images a
 **`cached_input_fraction` is recorded but should not be used to compare models.** Prompt caching is a
 property of the server's recent history, not of the model: it survives across runs, so the same
 benchmark twice reports different figures. It is there for diagnosing why input tokens or latency
-moved.
+moved. `total_cache_creation_input_tokens` (and `cache_creation_input_tokens` per row) is Anthropic
+only — tokens written *into* the cache, billed above the plain input rate — and 0 everywhere else;
+price an Anthropic run from both figures, not from the cached reads alone.
+
+An `--input xml` file (named `xml-…`) adds, and a screenshot file lacks: top-level
+`"input": "xml"`; `summary.xml_outcomes` (`answered_correct`,
+`answered_incorrect`, `not_found`, `invalid_xpath`, `no_match`, `error`, `not_answered`, their
+`shares`, and the same per phrasing under `by_description`); and per row `"input": "xml"`,
+`"xpath"`, `"xml_outcome"` and `"xpath_matches"`. `raw` holds the model's reply — the XPath or
+`NOT_FOUND` — and `img_w`/`img_h` are the tree's `<hierarchy width height>`. A file without the
+`input` key predates the track and is a screenshot run. A vision file made with `--only-from`
+adds `only_from` (the XML result that chose its rows) and `only_from_rows`.

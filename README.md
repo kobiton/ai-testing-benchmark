@@ -16,7 +16,10 @@ findElement(byDescription("the scan QR code button"))   // illustrative
 
 and let a vision model locate the element on screen.
 
-This repository benchmarks exactly that.
+This repository benchmarks exactly that — and the other way a natural-language locator can work: 
+hand a text model the screen's accessibility tree instead of the screenshot and ask for the XPath.
+Both strategies are scored on the same elements, the same descriptions and the same ground truth,
+and a third scorer joins them into the cascade a locator would actually run: tree first, screenshot only when the tree gives nothing.
 
 It contains **841 real Android screenshots and 10,307 ground-truth UI elements**, each described in three different ways. 
 The runner works with any **OpenAI-compatible endpoint**, including vLLM, llama.cpp, Ollama, and hosted APIs.
@@ -162,6 +165,28 @@ ten to twelve for the open-weight ones — the gap widens as the model weakens, 
 Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 
 Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
 
+### Tree first, screenshot as the fallback
+
+The screenshot is not the only thing a locator can show a model. The page source - the accessibility tree UiAutomator dumps,
+one `<screenshot_id>.xml` per screenshot under [`data/xml/`](data/xml/). It can be filtered and sent as text, and the model asked for **one XPath or `NOT_FOUND`**.
+The XPath is run on the full tree, the first node's `bounds` become the predicted box, and the same centroid rule applies. 
+`--input xml` is that track; it needs no vision model at all.
+
+A locator in the field would try the tree first and fall back to the screenshot only when the tree yields nothing, so the two tracks are joined into that cascade by `benchmark/score_cascade.py`,
+with no new request: XML correct / incorrect / not answered; on the not-answered rows, vision correct / incorrect / not answered; then the two totals. 
+The rule has one consequence worth knowing before reading any number: a *wrong* XPath is final — the fallback fires on "not answered", never on "answered wrongly",
+so the cascade can come out below the screenshot strategy on its own.
+
+Two facts about the data shape every XML figure. The dumps hold the application window only, where a tree read on a device also holds the keyboard,
+so the ~1,700 elements that are keys on the on-screen keyboard come back `NOT_FOUND` for a reason that is the data's, not the model's; 
+the scorer counts them as a footnote rather than removing them.
+And the vision prompt here allows no "not found" answer, so the cascade's "vision not answered" line holds only parse failures and errors.
+
+<!-- TODO: table of the eight cascade figures for GPT-5.6 and Claude Opus 4.8 over the 10,568 gpt- elements of the human ground truth, from reference-results/cascade-*.json, once the two full XML runs and the GPT-5.6 --only-from vision run have finished. -->
+
+How the track works, request by request, and what every `xml_outcome` means:
+[`benchmark/README.md`](benchmark/README.md#--input-xml--the-xml-track).
+
 ---
 
 ## Quickstart
@@ -198,6 +223,15 @@ python benchmark/run_vision_benchmark.py \
     --base-url http://localhost:8000 \
     --model qwen2.5-vl \
     --description-index 0 1 2
+```
+
+The same command with `--input xml` scores the tree strategy instead — no image is sent, so any text model will do — and writes `xml-<model>-…` rather than `vision-<model>-…`:
+
+```bash
+python benchmark/run_vision_benchmark.py --input xml \
+    --base-url http://localhost:8000 \
+    --model qwen2.5-vl \
+    --limit 200
 ```
 
 Output lands in `benchmark-results/vision-<model>-GT-<dataset>-<timestamp>.json`. 
@@ -304,7 +338,17 @@ which is what makes the centroid/IoU split legible.
 The human labelling is what turned that limitation from assumed into measured — 
 the label-quality numbers and what the adjudication found are the headline of [Results](#results).
 
-Everything is in the repository: all three `.jsonl` files, their stats sidecars, and all 841 PNGs under `data/images/`, named `<screenshot_id>.png`. 
+A fourth file, `dataset-v1-human-gpt.jsonl`, is the human file's 10,568 `gpt-` elements on their own — the population every
+figure in [Results](#results) is over (`summary.by_source.gpt` of a run on the full file). The XML-track and cascade reference
+results were run on it directly, so their filenames carry `-GT-v1-human-gpt-`.
+
+Beside each screenshot sits its **page source**: `data/xml/<screenshot_id>.xml`, the UiAutomator dump captured at the same
+moment, 841 of them. It is what `--input xml` sends to the model and runs the returned XPath on. It covers the application window
+only — the on-screen keyboard, which a tree read on a live device would include, is not in it — and the
+[XML track's notes](benchmark/README.md#--input-xml--the-xml-track) say what that does to the numbers.
+
+Everything is in the repository: all four `.jsonl` files, their stats sidecars, all 841 PNGs under `data/images/`, named
+`<screenshot_id>.png`, and the 841 dumps under `data/xml/`. 
 A clone is ~320 MB and is everything the benchmark needs; no separate download step required.
 
 ---
@@ -487,18 +531,21 @@ Two warnings the flags do not carry:
 
 ```
 benchmark/
-  run_vision_benchmark.py   the benchmark; --help lists every flag
+  run_vision_benchmark.py   the benchmark, both tracks; --help lists every flag
+  score_cascade.py          tree-then-screenshot cascade from an xml-… and a vision-… result
   README.md                 every metric, every field, and why each exists
-  cli/ engine/ artifacts/   the flags · the run · checkpoint, result JSON, re-scoring
+  cli/ engine/ artifacts/   the flags · the run · checkpoint, result JSON, re-scoring, cascade rules
   model/ scoring/ workload/ the system under test · what an answer means · what gets scored
 pipeline/                   the four labelling steps
 run_pipeline.py             pipeline entrypoint
 data/
-  dataset-v1.jsonl          ground truth, labelled by Opus   ← committed
-  dataset-v1-gpt-5.6.jsonl  the same screens, by GPT-5.6     ← committed
-  dataset-v1-human.jsonl    a human adjudicating the two     ← committed
-  images/                   841 screenshots, <id>.png        ← committed
-reference-results/          our published summaries          ← committed
+  dataset-v1.jsonl          ground truth, labelled by Opus          ← committed
+  dataset-v1-gpt-5.6.jsonl  the same screens, by GPT-5.6            ← committed
+  dataset-v1-human.jsonl    a human adjudicating the two            ← committed
+  dataset-v1-human-gpt.jsonl  its 10,568 gpt- elements on their own ← committed
+  images/                   841 screenshots, <id>.png               ← committed
+  xml/                      841 page-source dumps, <id>.xml         ← committed
+reference-results/          our published summaries                 ← committed
 ```
 
 Both tools write only inside the repository, and everything they write is gitignored:
