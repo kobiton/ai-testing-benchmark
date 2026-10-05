@@ -170,7 +170,10 @@ Latency is recorded per run, but each figure describes its own serving setup —
 The screenshot is not the only thing a locator can show a model. The page source - the accessibility tree UiAutomator dumps,
 one `<screenshot_id>.xml` per screenshot under [`data/xml/`](data/xml/). It can be filtered and sent as text, and the model asked for **one XPath or `NOT_FOUND`**.
 The XPath is run on the full tree, the first node's `bounds` become the predicted box, and the same centroid rule applies. 
-`--input xml` is that track; it needs no vision model at all.
+`--input xml` is that track; it needs no vision model at all. 
+The instructions the model reads are a text file (`--xml-prompt`). The one our reference figures were measured with ships 
+inside a product and is not in this repository, so the default here is a shorter prompt of the same shape, and a run with it 
+will differ from the published `xml-…` numbers by the prompt rather than by the harness. Every result records the prompt's name and hash.
 
 A locator in the field would try the tree first and fall back to the screenshot only when the tree yields nothing, so the two tracks are joined into that cascade by `benchmark/score_cascade.py`,
 with no new request: XML correct / incorrect / not answered; on the not-answered rows, vision correct / incorrect / not answered; then the two totals. 

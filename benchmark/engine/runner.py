@@ -26,7 +26,7 @@ from benchmark.artifacts import checkpoint
 from benchmark.scoring.coords import _coord_grid_for, _normalize_model_name
 from benchmark.scoring.metrics import IOU_THRESHOLD, _compute_iou, _point_inside_bbox
 from benchmark.model.client import _call_model, _call_model_text, _list_loaded_models, _probe_served_model
-from benchmark.model.xml_tree import ViewTreeStore, build_xml_prompt
+from benchmark.model.xml_tree import ViewTreeStore, XmlPrompt, build_xml_prompt, load_xml_prompt
 from benchmark.scoring.xpath import xml_prediction
 from benchmark.workload.phrasings import _expand_pairs, _style_of
 from benchmark.artifacts.builder import build_result, gt_boxes_from_dataset
@@ -210,6 +210,7 @@ def _benchmark_element_xml(
     temperature: float,
     api_flavor: str,
     trees: ViewTreeStore,
+    prompt: XmlPrompt,
     pacer: "RatePacer | None" = None,
 ) -> dict:
     """One (element, phrasing) under `--input xml`: the tree in, an XPath out, a box graded.
@@ -250,7 +251,7 @@ def _benchmark_element_xml(
         return {**base, "error": "xml dump not found"}
     base["img_w"], base["img_h"] = vt.width, vt.height
 
-    prefix, suffix = build_xml_prompt(desc, vt.filtered_xml)
+    prefix, suffix = build_xml_prompt(desc, vt.filtered_xml, prompt)
     if pacer:
         pacer.wait()
     content, latency_ms, error, meta = _call_model_text(
@@ -315,6 +316,7 @@ def run_benchmark(
     prompt_style: str = "pixels",
     input_mode: str = "screenshot",
     xml_dir: str = "",
+    xml_prompt: str = "",
     gt_boxes: dict = None,
     rpm: int = 0,
     max_requests: int = 0,
@@ -357,7 +359,9 @@ def run_benchmark(
 
     xml = input_mode == "xml"
     trees = ViewTreeStore(xml_dir) if xml else None
+    prompt = load_xml_prompt(xml_prompt) if xml else None
     if xml:
+        logger.info("  XML prompt: %s (sha256 %s)", prompt.path, prompt.sha256)
         # The coordinate prompt never goes out on this track, so the result must not claim one. Recorded as the prompt that did: the XPath template.
         prompt_style = "xpath"
         # Checked up front, whether or not this is a dry run: a missing dump is per screenshot, and finding out at a paid run is the expensive way.
@@ -420,6 +424,18 @@ def run_benchmark(
                 ckpt, prior_grid or "pixel", grid or "pixel", prior_grid, len(done))
             sys.exit(1)
 
+        # And for the XML prompt: a checkpoint's rows were asked with one set of instructions,
+        # and resuming them under another would put two prompts in one score. Headers written
+        # before the prompt became a file carry no hash and are taken as they are.
+        prior_prompt = meta.get("xml_prompt_sha256")
+        if xml and resumed and prior_prompt and prior_prompt != prompt.sha256:
+            logger.error(
+                "Checkpoint %s was scored with XML prompt %s (sha256 %s) but this run uses %s "
+                "(sha256 %s). Pass --xml-prompt with the same file, or --no-resume to discard "
+                "%d scored pair(s) and start over.",
+                ckpt, meta.get("xml_prompt", "?"), prior_prompt, prompt.name, prompt.sha256, len(done))
+            sys.exit(1)
+
         # A checkpoint may hold pairs outside this run's selection — a smaller --limit,
         # or the phrasings of an earlier run this one does not ask for — so keep only
         # what belongs to the current set.
@@ -457,7 +473,9 @@ def run_benchmark(
                 "prompt_style": prompt_style,
                 "coord_grid": grid,
                 # Which track wrote these rows: --finalize-only rebuilds from this header alone, and the track changes what the rows mean.
-                "input": input_mode}
+                "input": input_mode,
+                # XML only: which instructions the rows were asked with. Checked on resume.
+                **({"xml_prompt": prompt.name, "xml_prompt_sha256": prompt.sha256} if xml else {})}
 
         futures = {}
         stopped_early = False
@@ -468,7 +486,7 @@ def run_benchmark(
                         _benchmark_element_xml,
                         client, proxy_url, api_key, model,
                         row, idx, timeout, max_tokens, temperature, api_flavor,
-                        trees, pacer,
+                        trees, prompt, pacer,
                     )
                 else:
                     f = pool.submit(
@@ -526,4 +544,6 @@ def run_benchmark(
         checkpoint_path=str(ckpt),
         gt_boxes=gt_boxes or gt_boxes_from_dataset(dataset),
         input_mode=input_mode,
+        xml_prompt=prompt.name if xml else "",
+        xml_prompt_sha256=prompt.sha256 if xml else "",
     )

@@ -131,6 +131,7 @@ not the requested one, is the fact that decides how its answers must be read.
 | `--rescore`           | —                                      | Re-score a finished result file from its own `raw` text and exit. Calls no model                                                                                                                                                                             |
 | `--input`             | `screenshot`                           | What the model is shown. `screenshot` is the vision track. `xml` is the tree track: the accessibility tree, filtered, sent as text with no image; the model answers one XPath or `NOT_FOUND`. Output files are `xml-…`, the checkpoint is its own. See below |
 | `--xml-dir`           | `data/xml`                             | With `--input xml`: the UiAutomator dumps, `<screenshot_id>.xml`. App window only — a tree read on a device also has the keyboard                                                                                                                            |
+| `--xml-prompt`        | `model/prompts/xpath-android.txt`      | With `--input xml`: the instructions sent before the tree, as a text file; the harness appends the tree and the description. Swap in your own; the result records the file's name and a hash of its text. See below |
 | `--only-from`         | —                                      | Vision track only: score just the rows this `--input xml` result did not answer (`NOT_FOUND`, invalid XPath, no match), the rows a tree-then-screenshot cascade sends to vision. Output gains `-ONLY-FROM-xml` and records the source. See below             |
 | `--rpm`               | `0`                                    | Cap request starts at N per minute across all workers (`0` = none). Keeps a paid run under the account's per-minute limit, which other users share. See below                                                                                                |
 | `--max-requests`      | `0`                                    | Make at most N model calls this invocation, then write a `PARTIAL` result and keep the checkpoint (`0` = none). Counts (element, phrasing) pairs, unlike `--limit`. Re-run the same command to carry on. See below                                           |
@@ -521,7 +522,9 @@ What one request is:
 
 1. The screenshot's dump is filtered (`benchmark/model/xml_tree.py`): leaf nodes with no `text` / `content-desc` / `resource-id` / `hint` go, over-deep branches go,
    every attribute outside the essential set (identifiers, text, state, bounds) goes. Invisible nodes stay.
-2. The filtered tree and the description are formatted into the Android XPath prompt and sent as text with **no image**.
+2. The instructions file (`--xml-prompt`), the filtered tree under `UI ELEMENT HIERARCHY:` and the
+   description under `USER DESCRIPTION:` go out as text with **no image** — instructions and tree
+   as the system message, the description as the user message.
 3. The reply is stripped of a code fence or backticks, then run as XPath 1.0 against the **full** dump (`lxml`; a driver runs it on the live tree, which knows nothing of the filter).
    The **first** matching node is taken, as a driver's find-element takes it.
 4. That node's `bounds` become `pred_bbox`, and the centroid and IoU metrics apply unchanged. `xpath` is in the file beside `raw`.
@@ -538,6 +541,16 @@ Every row records `xml_outcome`, and **none of these four is an `error`** — th
 `summary.xml_outcomes` counts them — `answered_correct` / `answered_incorrect` by the centroid rule,
 the three not-answered kinds separately and summed as `not_answered` — per file and per phrasing.
 Those are the buckets an XML-then-vision cascade is counted in: everything but `answered` falls through to vision.
+
+**The prompt.** The default file, `benchmark/model/prompts/xpath-android.txt`, has the shape a
+production locator's prompt has — the role, the strict output contract (one XPath or `NOT_FOUND`,
+nothing else), the grounding rules, the Android attribute priority, the ordinal pattern — in fewer
+words. It is **not** the prompt our reference `xml-…` figures were measured with: that one ships
+inside a product and is not in this repository, so a run with the default here will differ from
+the published numbers by the prompt, not by the harness. Every result records the prompt's file
+name and a hash of its text (`xml_prompt`, `xml_prompt_sha256`), so two files can always be told
+apart. To measure with your own, write the instructions to a file and pass `--xml-prompt`; the
+harness appends the tree and the description itself, in that order.
 
 Two things about the input are worth knowing, and both are in the file:
 
@@ -996,7 +1009,7 @@ only — tokens written *into* the cache, billed above the plain input rate — 
 price an Anthropic run from both figures, not from the cached reads alone.
 
 An `--input xml` file (named `xml-…`) adds, and a screenshot file lacks: top-level
-`"input": "xml"`; `summary.xml_outcomes` (`answered_correct`,
+`"input": "xml"`, `"xml_prompt"` (the instructions file's name) and `"xml_prompt_sha256"` (a hash of its text); `summary.xml_outcomes` (`answered_correct`,
 `answered_incorrect`, `not_found`, `invalid_xpath`, `no_match`, `error`, `not_answered`, their
 `shares`, and the same per phrasing under `by_description`); and per row `"input": "xml"`,
 `"xpath"`, `"xml_outcome"` and `"xpath_matches"`. `raw` holds the model's reply — the XPath or

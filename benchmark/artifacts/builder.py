@@ -281,8 +281,11 @@ def build_result(
     *,
     prompt_style: str,
     gt_boxes: dict = None,
-    # Which track produced the rows. `screenshot` stays the default, `xml` adds `summary.xml_outcomes`.
+    # Which track produced the rows. `screenshot` stays the default, `xml` adds `summary.xml_outcomes`
+    # and records which prompt file the tree was sent with.
     input_mode: str = "screenshot",
+    xml_prompt: str = "",
+    xml_prompt_sha256: str = "",
 ) -> dict:
     """Score `results` and shape them into the result file.
 
@@ -587,6 +590,9 @@ def build_result(
         "prompt_style": prompt_style,
         # `screenshot` or `xml` — which input the model was given. A file without the key predates the XML track and is a screenshot run.
         "input": input_mode,
+        # XML only: the instructions file the rows were asked with, by name and by a hash of
+        # its text. Two xml- files are comparable only when the hash matches.
+        **({"xml_prompt": xml_prompt, "xml_prompt_sha256": xml_prompt_sha256} if input_mode == "xml" else {}),
         # Part of what error_count means: a run whose cap was too low for a thinking
         # model records truncations as errors, so the cap has to be readable off the
         # artifact to tell that apart from a model that answers badly.
@@ -679,8 +685,10 @@ def finalize_from_checkpoint(
     # Same rule again, and the default is a fact rather than a guess: a checkpoint written
     # before --prompt-style existed can only have come from the one prompt there was.
     prompt_style = meta.get("prompt_style") or "normalized"
-    # The track is decided by which checkpoint file was opened; the header only confirms it.
+    # The track is decided by which checkpoint file was opened; the header only confirms it
+    # and, on the XML track, names the prompt the rows were asked with.
     input_mode = meta.get("input") or input_mode
+    xml_prompt, xml_prompt_sha256 = meta.get("xml_prompt") or "", meta.get("xml_prompt_sha256") or ""
 
     logger.info("Finalizing %d of %d selected (element, phrasing) pair(s) from %s",
                 len(results), len(pairs), ckpt)
@@ -705,4 +713,6 @@ def finalize_from_checkpoint(
         checkpoint_path=str(ckpt),
         gt_boxes=gt_boxes_from_dataset(dataset),
         input_mode=input_mode,
+        xml_prompt=xml_prompt,
+        xml_prompt_sha256=xml_prompt_sha256,
     )

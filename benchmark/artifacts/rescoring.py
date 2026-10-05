@@ -388,6 +388,8 @@ def rescore_result(prior: dict, images_dir: str, coord_grid: int,
         selected_elements=summary.get("selected_elements") or len(out_rows),
         stopped_early=bool(prior.get("stopped_early")),
         input_mode=prior.get("input") or "screenshot",
+        xml_prompt=prior.get("xml_prompt") or "",
+        xml_prompt_sha256=prior.get("xml_prompt_sha256") or "",
     )
     result.pop("checkpoint_path", None)
     # `date` is when the inference happened, and that is still the original run — the

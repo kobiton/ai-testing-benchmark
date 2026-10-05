@@ -12,6 +12,7 @@ from pathlib import Path
 
 from benchmark.model.client import API_FLAVORS
 from benchmark.model.prompts import PROMPT_STYLES
+from benchmark.model.xml_tree import DEFAULT_XML_PROMPT
 
 # This file is <repo>/benchmark/cli/args.py, so the root is three levels up. Every path
 # default is built from this rather than from the caller's CWD: `python
@@ -205,6 +206,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "window only — a tree read on a device also holds the "
                              "keyboard window — so a key on the on-screen keyboard has no "
                              "node here.")
+    parser.add_argument("--xml-prompt", default=str(DEFAULT_XML_PROMPT), metavar="FILE",
+                        help="With --input xml: a text file holding the instructions sent "
+                             "before the tree. The harness appends the filtered tree under "
+                             "'UI ELEMENT HIERARCHY:' and the description under 'USER "
+                             "DESCRIPTION:' itself. The result records the file's name and a "
+                             "hash of its text, and a checkpoint refuses to resume under a "
+                             "different prompt. Default: the file beside model/xml_tree.py.")
     parser.add_argument("--only-from", default="", metavar="XML_RESULT.json",
                         help="Vision track only: score just the (element, phrasing) rows this "
                              "--input xml result did not answer (NOT_FOUND, invalid XPath, no "

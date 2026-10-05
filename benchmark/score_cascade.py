@@ -53,7 +53,8 @@ def render(pair_name: str, xml: dict, vision: dict, res: dict, xml_path: str, vi
     blocks = [("all", res["overall"])] + [(f"{idx} · {b['style']}", b) for idx, b in res["by_description"].items()]
     cols = [name for name, _ in blocks]
     lines = [f"## {pair_name}", ""]
-    lines.append(f"- XML: `{xml.get('model')}` · `{Path(xml_path).name}`")
+    prompt = f" · prompt `{xml['xml_prompt']}` ({xml.get('xml_prompt_sha256', '')})" if xml.get("xml_prompt") else ""
+    lines.append(f"- XML: `{xml.get('model')}`{prompt} · `{Path(xml_path).name}`")
     lines.append(f"- Vision: `{vision.get('model')}` · prompt style `{vision.get('prompt_style', '')}` · `{Path(vision_path).name}`")
     o = res["overall"]
     lines.append(f"- Population: {o['total']} rows; vision consulted on the {o['vision_rows_used']} rows XML did not answer. "
@@ -116,6 +117,7 @@ def main() -> None:
         name = f"{xml.get('model')} (XML) → {vision.get('model')} (vision)"
         print(render(name, xml, vision, res, xml_path, vision_path, with_vision_alone=a.with_vision_alone))
         out.append({"xml_file": xml_path, "xml_model": xml.get("model"),
+                    "xml_prompt": xml.get("xml_prompt", ""), "xml_prompt_sha256": xml.get("xml_prompt_sha256", ""),
                     "vision_file": vision_path, "vision_model": vision.get("model"),
                     "vision_prompt_style": vision.get("prompt_style", ""), "source": a.source, **res})
 

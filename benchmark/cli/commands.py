@@ -106,6 +106,9 @@ def main():
         if not xml_dir.exists() and not args.finalize_only:
             logger.error("XML dump directory not found: %s", xml_dir)
             sys.exit(1)
+        if not Path(args.xml_prompt).is_file() and not args.finalize_only:
+            logger.error("XML prompt file not found: %s", args.xml_prompt)
+            sys.exit(1)
     elif not images_dir.exists() and not args.finalize_only:
         logger.error("Images directory not found: %s", images_dir)
         sys.exit(1)
@@ -201,6 +204,7 @@ def main():
                 prompt_style=args.prompt_style,
                 input_mode=args.input,
                 xml_dir=str(xml_dir),
+                xml_prompt=args.xml_prompt,
                 gt_boxes=all_gt_boxes,
                 rpm=args.rpm,
                 max_requests=args.max_requests,
