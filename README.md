@@ -42,16 +42,14 @@ under the `name` phrasing unless a table says otherwise.
 
 ### At a glance
 
-Three ways to locate the same element, two models that were measured under all three. 
+Three ways to locate the same element, three models that were measured under all three. 
 Correct means that the center of the returned box, or of the node selected by the XPath, falls within the human-annotated box for that element.
 
-|                     | Screenshot alone          | Tree alone | Tree first, screenshot as the fallback |
-|---------------------|---------------------------|------------|----------------------------------------|
-| **GPT-5.6**         | 96.4% (label boxes)¹      | 58.1%      | 89.2%                                  |
-| **Claude Opus 4.8** | 91.3%                     | 57.2%      | 86.8%                                  |
-
-¹ GPT-5.6 co-authored this corpus, so its screenshot figure scores the *label* boxes it drew while describing the elements, not answers to a question, so read it as label quality.
-Its tree and cascade figures are benchmark answers like Opus's.
+|                        | Screenshot alone          | Tree alone | Tree first, screenshot as the fallback |
+|------------------------|---------------------------|------------|----------------------------------------|
+| **GPT-5.6**            | 96.4%                     | 58.1%      | 89.2%                                  |
+| **Claude Opus 4.8**    | 91.3%                     | 57.2%      | 86.8%                                  |
+| **Qwen2.5-VL-7B**      | 84.6%                     | 35.8%      | 81.5%                                  |
 
 Tree alone and the cascade are not the same measurement as the screenshot alone, and the gap between the columns is the point:
 a third of the elements have no node the tree can name (the keyboard, and interfaces drawn without a tree - see [On the accessibility tree](#on-the-accessibility-tree)),
@@ -108,27 +106,32 @@ The same 10,568 elements, the same three phrasings, no image: the filtered page 
 one XPath or `NOT_FOUND` comes back, the XPath is run on the full tree and the first node it selects is graded by the same
 centroid rule. Over all three phrasings — 31,704 requests per model, percentages of that total:
 
-|                                              |        GPT-5.6 | Claude Opus 4.8 |
-|----------------------------------------------|----------------|-----------------|
-| answered, right element                      | 58.1% (18,433) |  57.2% (18,125) |
-| answered, wrong element                      |  10.5% (3,327) |    9.5% (2,999) |
-| not answered                                 |  31.4% (9,944) |  33.4% (10,580) |
-| ↳ of which `NOT_FOUND`                       |          9,637 |          10,251 |
-| ↳ of which the XPath did not compile         |              3 |              46 |
-| ↳ of which the XPath matched no node         |            304 |             283 |
-| right among the answered                     |          84.7% |           85.8% |
-| elements right under **all three** phrasings |          54.6% |           52.9% |
+|                                              |        GPT-5.6 | Claude Opus 4.8 |   Qwen2.5-VL-7B |
+|----------------------------------------------|----------------|-----------------|-----------------|
+| answered, right element                      | 58.1% (18,433) |  57.2% (18,125) |  35.8% (11,339) |
+| answered, wrong element                      |  10.5% (3,327) |    9.5% (2,999) |    9.8% (3,098) |
+| not answered                                 |  31.4% (9,944) |  33.4% (10,580) |  54.4% (17,261) |
+| ↳ of which `NOT_FOUND`                       |          9,637 |          10,251 |          12,757 |
+| ↳ of which the XPath did not compile         |              3 |              46 |             160 |
+| ↳ of which the XPath matched no node         |            304 |             283 |           4,344 |
+| right among the answered                     |          84.7% |           85.8% |           78.5% |
+| elements right under **all three** phrasings |          54.6% |           52.9% |           23.4% |
 
-Two models that are seven points apart on the screenshot are within a point of each other on the tree, in every row. 
-On this input the ceiling is the data's, not the model's:
+Two models that are seven points apart on the screenshot are within a point of each other on the tree, in every row;
+the third, seven points behind Opus on the screenshot, is 21 points behind it here. For GPT-5.6 and Opus the ceiling is the data's, not the model's:
 
 - **A third of the requests get no answer, and half of those are the keyboard.** 5,060 of the 31,704 requests describe a key on
-  the on-screen keyboard; the page source holds the application window only, so no such node exists, and both models say
-  `NOT_FOUND` on ~96% of them. Excluding those rows, *not answered* is 19.2% for GPT-5.6 and 21.3% for Opus over the remaining
-  26,644. The rest are interfaces drawn without a usable tree, such as one container for a whole screen, links inside a text run -
+  the on-screen keyboard; the page source holds the application window only, so no such node exists, and GPT-5.6 and Opus say
+  `NOT_FOUND` on ~96% of them (Qwen on 90%). Excluding those rows, *not answered* is 19.2% for GPT-5.6 and 21.3% for Opus over
+  the remaining 26,644, and 47.4% for Qwen. The rest are interfaces drawn without a usable tree, such as one container for a whole screen, links inside a text run -
   which no prompt can fix.
-- **When the tree does name the element, the model is right about 85% of the time**, and the ~10% it gets wrong is the part no fallback recovers: see the cascade.
-- The phrasing barely moves the right-answer rate (57–58% under all three for both models); `intent` draws a few more wrong answers.
+- **When the tree does name the element, the model is right about 85% of the time**, and the ~10% it gets wrong is the part no fallback recovers: see the cascade. 
+  The phrasing barely moves the right-answer rate for GPT-5.6 and Opus (57–58% under all three); `intent` draws a few more wrong answers.
+- **Qwen2.5-VL: close from the screenshot, far behind from the tree.** From the screenshot it is 6.7 points behind Opus (84.6% against 91.3%); 
+  from the tree it is 21 points behind (35.8% against 57.2%), answers right a third of the time, and moves with the wording (40% under `name`, 33% under `label`). 
+  4,344 of its XPaths (13.7% of requests) compile but select nothing, fourteen times GPT-5.6's 304:
+  they name attributes the tree does not have. On 6 further requests, left out of the table, it repeated one path step until the 2,048-token cap; 
+  GPT-5.6 and Opus produced no such answer in 31,704 (see [Answers stuck in a repetition loop on the tree track](#answers-stuck-in-a-repetition-loop-on-the-tree-track)).
 
 Every row's `xml_outcome` and the per-file counts (`summary.xml_outcomes`) are in the result files;
 [On the accessibility tree](#on-the-accessibility-tree) explains what each outcome means and how the prompt is handled.
@@ -138,38 +141,39 @@ Every row's `xml_outcome` and the per-file counts (`summary.xml_outcomes`) are i
 A locator in the field would try the tree first and show the model the screenshot only when the tree yields nothing.
 No new request is needed to measure that: the two tracks above are joined per (element, phrasing) by `benchmark/score_cascade.py`.
 Every request falls into exactly one of lines 1, 2, 4, 5 or 6; lines 3, 7 and 8 are sums. 
-Over all three phrasings, 31,704 requests per model, percentages of that total:
+Over all three phrasings, 31,704 requests per model (31,698 for Qwen, whose 6 tree errors are left out), percentages of that total:
 
-| # |                                              |            GPT-5.6 |    Claude Opus 4.8 |
-|---|----------------------------------------------|--------------------|--------------------|
-| 1 | tree answered correctly                      |     58.1% (18,433) |     57.2% (18,125) |
-| 2 | tree answered incorrectly                    |      10.5% (3,327) |       9.5% (2,999) |
-| 3 | tree did not answer → sent to the screenshot |      31.4% (9,944) |     33.4% (10,580) |
-| 4 | screenshot answered correctly                |      30.5% (9,675) |      30.2% (9,575) |
-| 5 | screenshot answered incorrectly              |         0.9% (269) |       3.2% (1,005) |
-| 6 | screenshot did not answer                    |             0% (0) |             0% (0) |
-| 7 | **correct overall** (1 + 4)                  | **88.7% (28,108)** | **87.4% (27,700)** |
-| 8 | **incorrect overall** (2 + 5 + 6)            |      11.3% (3,596) |      12.6% (4,004) |
+| # |                                              |            GPT-5.6 |    Claude Opus 4.8 |      Qwen2.5-VL-7B |
+|---|----------------------------------------------|--------------------|--------------------|--------------------|
+| 1 | tree answered correctly                      |     58.1% (18,433) |     57.2% (18,125) |     35.8% (11,339) |
+| 2 | tree answered incorrectly                    |      10.5% (3,327) |       9.5% (2,999) |       9.8% (3,098) |
+| 3 | tree did not answer → sent to the screenshot |      31.4% (9,944) |     33.4% (10,580) |     54.4% (17,261) |
+| 4 | screenshot answered correctly                |      30.5% (9,675) |      30.2% (9,575) |     45.9% (14,555) |
+| 5 | screenshot answered incorrectly              |         0.9% (269) |       3.2% (1,005) |       8.5% (2,702) |
+| 6 | screenshot did not answer                    |             0% (0) |             0% (0) |           0.0% (4) |
+| 7 | **correct overall** (1 + 4)                  | **88.7% (28,108)** | **87.4% (27,700)** | **81.7% (25,894)** |
+| 8 | **incorrect overall** (2 + 5 + 6)            |      11.3% (3,596) |      12.6% (4,004) |      18.3% (5,804) |
 
-By phrasing, line 7 is 89.2% / 90.5% / 86.3% for GPT-5.6 and 86.8% / 89.4% / 85.9% for Opus (`name` / `label` / `intent`):
-the same ordering as on the screenshot. All eight lines per phrasing are in the details block at the end of this section.
+By phrasing, line 7 is 89.2% / 90.5% / 86.3% for GPT-5.6, 86.8% / 89.4% / 85.9% for Opus and 81.5% / 87.4% / 76.2% for Qwen
+(`name` / `label` / `intent`): the same ordering as on the screenshot. All eight lines per phrasing are in the details block at the end of this section.
 
 How to read it:
 
 - **A wrong XPath is final.** The fallback fires on *not answered*, never on *answered wrongly*, so line 2 is lost for good and
   the cascade can score below the screenshot alone. It does here: Opus's screenshot answers alone are right on 92.0% of
   these same 31,704 requests, the cascade on 87.4% — the 9.5% lost in line 2 outweighs the 3.2% the screenshot gets wrong
-  in line 5.
-- **The screenshot half was asked only where the tree gave nothing**, for both models, and graded by the same centroid rule
-  as the screenshot table above (`pixels` prompt). On those rows the screenshot is right 97.3% of the time for GPT-5.6 and
-  90.5% for Opus - the rows the tree could not name are not hard for a vision model.
+  in line 5. Qwen loses the same way, 86.0% alone against 81.7% in the cascade.
+- **The screenshot half was asked only where the tree gave nothing**, for all three models, and graded by the same centroid
+  rule as the screenshot table above (`pixels` prompt). On those rows the screenshot is right 97.3% of the time for GPT-5.6,
+  90.5% for Opus and 84.3% for Qwen - the rows the tree could not name are not hard from the screenshot.
 - **Line 6 is 0 by construction, and that is the right reading for this dataset.** Every element the cascade asks about is
   on the screen, so it is in the human ground truth; "not found" is never the correct answer here, and letting the model
   decline could only turn a request in line 4 or 5 into a miss. The screenshot prompt therefore allows no "not found"
-  answer, and line 6 holds only parse failures and transport errors; both runs had none. What a model does when the element
-  is genuinely absent is a different question, and needs its own set of absent-element queries to measure.
-- **The keyboard sits in line 3.** The ~4,850 keyboard requests each model could not answer from the tree all go to the
-  screenshot, where a vision model handles them like any other control. The cascade therefore recovers the data gap, and
+  answer, and line 6 holds only parse failures and transport errors: none for GPT-5.6 and Opus, and for Qwen the 4 requests it
+  answered in prose with no box. What a model does when the element is genuinely absent is a different question, 
+- and needs its own set of absent-element queries to measure.
+- **The keyboard sits in line 3.** The ~4,850 keyboard requests GPT-5.6 and Opus could not answer from the tree (4,643 for Qwen)
+  all go to the screenshot, where they are handled like any other control. The cascade therefore recovers the data gap, and
   lines 4–5 should be read with that in mind.
 
 The sublines of 3 and 6 and the JSON behind the table are in [`reference-results/`](reference-results/) and described in
@@ -205,6 +209,19 @@ Each phrasing is 10,568 requests; the "all" column is the table above.
 | 6 | screenshot did not answer                    |                 0.0% (0) |          0.0% (0) |          0.0% (0) |          0.0% (0) |
 | 7 | **correct overall** (1 + 4)                  |       **87.4% (27,700)** | **86.8% (9,170)** | **89.4% (9,448)** | **85.9% (9,082)** |
 | 8 | **incorrect overall** (2 + 5 + 6)            |            12.6% (4,004) |     13.2% (1,398) |     10.6% (1,120) |     14.1% (1,486) |
+
+**Qwen2.5-VL-7B** — the 6 tree errors (2 `name`, 4 `label`) are left out of the counts.
+
+| # |                                              | all 3 phrasings (31,698) |     name (10,566) |    label (10,564) |   intent (10,568) |
+|---|----------------------------------------------|--------------------------|-------------------|-------------------|-------------------|
+| 1 | tree answered correctly                      |           35.8% (11,339) |     39.7% (4,195) |     32.7% (3,453) |     34.9% (3,691) |
+| 2 | tree answered incorrectly                    |             9.8% (3,098) |        9.0% (951) |        5.9% (627) |     14.4% (1,520) |
+| 3 | tree did not answer → sent to the screenshot |           54.4% (17,261) |     51.3% (5,420) |     61.4% (6,484) |     50.7% (5,357) |
+| 4 | screenshot answered correctly                |           45.9% (14,555) |     41.8% (4,413) |     54.7% (5,778) |     41.3% (4,364) |
+| 5 | screenshot answered incorrectly              |             8.5% (2,702) |      9.5% (1,005) |        6.7% (706) |        9.4% (991) |
+| 6 | screenshot did not answer                    |                 0.0% (4) |          0.0% (2) |          0.0% (0) |          0.0% (2) |
+| 7 | **correct overall** (1 + 4)                  |       **81.7% (25,894)** | **81.5% (8,608)** | **87.4% (9,231)** | **76.2% (8,055)** |
+| 8 | **incorrect overall** (2 + 5 + 6)            |            18.3% (5,804) |     18.5% (1,958) |     12.6% (1,333) |     23.8% (2,513) |
 
 </details>
 
@@ -243,6 +260,19 @@ Every result file carries the class per row (`answer_class`, with the id of the 
 asked-for box and the chosen one side by side. The worst cases of each kind, with those links, are listed per model under 
 [`reference-results/failures/`](reference-results/failures/) — what was asked, what was chosen instead — generated by `benchmark/list_failures.py`.
 
+### Answers stuck in a repetition loop on the tree track
+
+A tree-track answer is one XPath; the longest GPT-5.6 or Opus returned in 31,704 requests is 421 characters.
+Qwen2.5-VL-7B produced 24 answers (0.08%) that did not terminate: a path step such as `/android.widget.FrameLayout[@resource-id='…']` repeated up to 60 times, 
+or a `parent::` chain 70 deep, until the 2,048-token cap.
+
+At the endpoint's 20–25 tokens per second one such answer takes 65–115 seconds, which is how the run's first pass came to record 10 client timeouts; 
+a resume re-asked them and 6 hit the cap again, the run's 6 `error` rows. 
+The 24 fall on 11 screens whose trees are larger than the median but inside the normal range; 
+on the same 24 requests GPT-5.6 and Opus each answered 14 correctly, with XPaths of at most 178 characters. 
+No figure moves — the answers are already *not answered* or excluded — but the 24 took 9.1% of the run's output tokens and held other requests in the queue for over a minute. 
+The rows, the full answers and the arithmetic are in [`reference-results/repetition-loops/`](reference-results/repetition-loops/).
+
 ### How much the wording matters
 
 Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
@@ -273,9 +303,10 @@ All four find `label` easiest, it is the phrasing that repeats the element's vis
 The hardest phrasing splits two and two: GPT-5.6 and Qwen on `intent`, Opus and GUI-Owl on `name` - 
 Opus by a hair (91.26% against 91.29%), GUI-Owl by three points.
 
-On the tree the wording hardly matters to the right-answer rate - 57–58% under every phrasing for both models, because
-what decides a tree request is whether the element has a node at all, not how it was described. What moves is the wrong-answer
-rate: `intent`, the phrasing with no text handle, draws 12.9% wrong from GPT-5.6 against 8.6% under `label`.
+On the tree the wording hardly matters to the right-answer rate for GPT-5.6 and Opus - 57–58% under every phrasing - 
+because what decides a tree request is whether the element has a node at all, not how it was described. 
+Qwen is the exception: 40% / 33% / 35% under `name` / `label` / `intent`. 
+What moves is the wrong-answer rate: `intent`, the phrasing with no text handle, draws 12.9% wrong from GPT-5.6 against 8.6% under `label`.
 
 A single-phrasing headline flatters a model, because `name` is usually the element's visible text and `intent` deliberately 
 carries no text handle at all. 
@@ -295,7 +326,7 @@ Measured per element, on the screenshot:
 
 So the figure to plan reliability against is three points below the headline for the strongest model here, five for Opus, and
 ten to twelve for the open-weight ones — the gap widens as the model weakens, which is the opposite of what an average suggests. 
-(`summary.agreement` in every multi-phrasing result file carries these counts; on the tree it is 54.6% and 52.9%, in the table above.)
+(`summary.agreement` in every multi-phrasing result file carries these counts; on the tree it is 54.6%, 52.9% and 23.4%, in the table above.)
 
 Full summaries for every run — token totals and every field described below — are in [`reference-results/`](reference-results/). 
 Latency is recorded per run, but each figure describes its own serving setup — it is not comparable across rows, and not a production figure for any of them.
@@ -667,12 +698,12 @@ cp .env.example .env          # set LLM_PROVIDER and the matching API key
 python run_pipeline.py --input path/to/screenshots --output-name my-dataset
 ```
 
-| Step                 | Calls             |                                            |
-|----------------------|-------------------|--------------------------------------------|
-| 1 · extract elements | 1 per screenshot  | identify every interactive element         |
-| 2 · detect boxes     | **1 per element** | dominates the cost                         |
-| 3 · write descriptions | 1 per screenshot  | three phrasings each                       |
-| 4 · assemble         | 0                 | merge into one JSONL, write a stats sidecar |
+| Step                   | Calls             |                                             |
+|------------------------|-------------------|---------------------------------------------|
+| 1 · extract elements   | 1 per screenshot  | identify every interactive element          |
+| 2 · detect boxes       | **1 per element** | dominates the cost                          |
+| 3 · write descriptions | 1 per screenshot  | three phrasings each                        |
+| 4 · assemble           | 0                 | merge into one JSONL, write a stats sidecar |
 
 Everything it produces stays on your machine, under `data/`:
 
