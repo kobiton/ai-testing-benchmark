@@ -1,4 +1,4 @@
-# Qwen2.5-VL-7B-Instruct — the 24 answers stuck in a repetition loop, one by one
+# Qwen2.5-VL-7B-Instruct - the 24 answers stuck in a repetition loop, one by one
 
 Result file `xml-qwen25-vl-7b-3phrasing-GT-v1-human-gpt-20261007-062713.json`, `gpt-` elements, all three phrasings, 31,704 requests. 
 

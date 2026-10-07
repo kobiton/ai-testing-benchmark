@@ -49,8 +49,9 @@ and 20 `parent::` steps. Answers are either ordinary or unterminated.
 | depth                                       | 16 – 36        | 16 / 25                       |
 | siblings of the same class under one parent | 3 – 12         | 4 / 10                        |
 
-Four screens account for 16 of the 24 rows; on three of them every phrasing of the same element ran away. 
-By phrasing: `name` 9, `label` 10, `intent` 5.
+The 24 requests are 20 elements: one element looped under all three phrasings, two under two, the other 17 under a single
+phrasing, so the loop attaches to the particular question rather than to the element. Four screens account for 16 of the
+24 rows. By phrasing: `name` 9, `label` 10, `intent` 5.
 
 On the same 24 (tree, description) pairs GPT-5.6 answered 14 correctly and Opus 14; their longest XPaths there were 178 and 224 characters.
 
@@ -58,13 +59,13 @@ On the same 24 (tree, description) pairs GPT-5.6 answered 14 correctly and Opus 
 
 The endpoint generates 20–25 tokens per second. A capped answer therefore takes 65–115 seconds on its own, and the run's
 client timeout is 120 seconds, so an answer that reaches the cap while four other requests share the server crosses it.
-That is what the first pass of the run recorded: **18 errors, 10 of them timeouts**, the rest answers cut by the cap.
-A resume re-asked the 18; 12 stopped in time, 6 hit the cap again and are the 6 `error` rows of the final file.
+That is what the run's **10 client timeouts** were. Re-asked on resume, most of these answers stopped in time; the 6 that
+hit the cap again are the 6 `error` rows of the final file.
 
 Beside the error count:
 
-- The 18 unterminated answers that did stop held the generator for 15 minutes of a 106-minute run (5 streams); 
-  with the 6 capped and 10 timed-out ones, roughly 45 minutes of stream time went to 34 requests.
+- The 18 unterminated answers that did stop held the generator for 15 minutes of a 106-minute run (5 streams); with the
+  capped and timed-out ones, roughly 45 minutes of stream time went to these requests.
 - 9.1% of all output tokens of the run (32,438 of 358,389) are in 24 answers.
 - Five ordinary 3-token answers on another screen waited 64–68 seconds, queued behind an unterminated one. 
   The run's median latency is 0.7 s and its p99 2.9 s.
