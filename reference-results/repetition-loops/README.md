@@ -72,8 +72,9 @@ Beside the error count:
 
 ## Effect on the reported figures
 
-Nothing. The 6 capped answers are `error` rows and excluded from every figure; 
-the 18 that finished are `invalid_xpath` or `no_match` and counted as *not answered*, which is where an unusable locator lands whatever its length. 
+Nothing. Of the 24, the 6 that hit the cap are `error` rows and excluded from every figure; the 18 that stopped on their
+own are `invalid_xpath` or `no_match` and counted as *not answered*, which is where an unusable locator lands whatever its
+length. 
 A `--max-tokens 512` on a future run would end these answers in about 20 seconds instead of 100, and keep them from holding up other requests, 
 without changing a single verdict: the longest XPath any model returned on this track is 421 characters, about 140 tokens. 
 (The cap is for this endpoint. GPT-5.6's recorded `output_tokens` reach 1,118 on a 107-character answer 
