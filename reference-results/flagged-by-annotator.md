@@ -1,20 +1,20 @@
 # Elements the annotator flagged — not found, or ambiguous
 
-While adjudicating the two model labellings into `data/dataset-v1-human.jsonl`, the annotator saw each
-element's three descriptions and the labeller's box, and could flag instead of drawing. **55** elements were
-flagged *not found* — the description names something that is not on the screen — and **37** *ambiguous* —
-the description could fit more than one thing, or nothing decisively. Both kinds were left out of the ground
-truth, so no benchmark figure includes them.
+While adjudicating the two model labellings into `data/dataset-v1-human.jsonl`, 
+the annotator saw each element's three descriptions and the labeller's box, and could flag instead of drawing.
+**55** elements were flagged *not found* — the description names something that is not on the screen — 
+and **37** *ambiguous* — the description could fit more than one thing, or nothing decisively. 
+Both kinds were left out of the ground truth, so no benchmark figure includes them.
 
-The not-found set is the one place this corpus shows a labeller inventing an element (46 of the 55 carry
-GPT-5.6's descriptions, 9 Opus's; 16 are the same pattern, a guest-count "increase" stepper (adults, children, infants, pets) on one app).
-It is also the natural seed for measuring whether a model will answer *not found* when asked about something
-absent — see the README under [When it is wrong, what did it do?](../README.md#when-it-is-wrong-what-did-it-do).
+The not-found set is the one place this corpus shows a labeller inventing an element 
+(46 of the 55 carry GPT-5.6's descriptions, 9 Opus's; 16 are the same pattern, a guest-count "increase" stepper (adults, children, infants, pets) on one app).
+It is also the natural seed for measuring whether a model will answer *not found* when asked about something absent — 
+see the README under [When it is wrong, what did it do?](../README.md#when-it-is-wrong-what-did-it-do).
 
-Each line names the CVAT task and frame the annotator worked on, the element id as it appears in the
-labelling (`gpt-`/`opus-` prefix = whose description), and the `name` description. The links open the frame
-in CVAT and need a CVAT login; the screenshot itself is `data/images/<screenshot_id>.png`, and the two
-labellings' boxes for it are in `data/dataset-v1-gpt-5.6.jsonl` and `data/dataset-v1.jsonl`.
+Each line names the CVAT task and frame the annotator worked on, the element id as it appears in the labelling 
+(`gpt-`/`opus-` prefix = whose description), and the `name` description. 
+The links open the frame in CVAT and need a CVAT login; the screenshot itself is `data/images/<screenshot_id>.png`, 
+and the two labellings' boxes for it are in `data/dataset-v1-gpt-5.6.jsonl` and `data/dataset-v1.jsonl`.
 
 ## not_found (55)
 
