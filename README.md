@@ -47,7 +47,7 @@ Correct means that the center of the returned box, or of the node selected by th
 
 |                        | Screenshot alone          | Tree alone | Tree first, screenshot as the fallback |
 |------------------------|---------------------------|------------|----------------------------------------|
-| **GPT-5.6**            | 96.4%                     | 58.1%      | 89.2%                                  |
+| **GPT-5.6**            | 96.2%                     | 58.1%      | 89.2%                                  |
 | **Claude Opus 4.8**    | 91.3%                     | 57.2%      | 86.8%                                  |
 | **Qwen2.5-VL-7B**      | 84.6%                     | 35.8%      | 81.5%                                  |
 
@@ -59,17 +59,15 @@ and a wrong XPath is final, the fallback never fires on it. The three subsection
 
 |                             | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU | returned a box | asked for |
 |-----------------------------|------------------------------|-------------------------|------------|----------------|-----------|
-| **GPT-5.6**                 | **96.4%**                    | **89.7%**               | 0.963      | 100%           | pixels    |
+| **GPT-5.6**                 | **96.2%**                    | **81.7%**               | 0.890      | 100%           | pixels    |
 | **Claude Opus 4.8**         | 91.3%                        | 61.2%                   | 0.617      | 100%           | pixels    |
 | **Qwen2.5-VL-7B-Instruct**  | 84.6%                        | 55.4%                   | 0.553      | 99.98%         | pixels    |
 | **GUI-Owl-1.5-8B-Instruct** | 81.8%                        | 2.1%                    | 0.216      | 16.4%          | floats    |
 
-The GPT-5.6 row scores the *label* boxes GPT drew as this corpus's co-author — and the human ground truth was made by 
-adjudicating between those very boxes — so read it as label quality, not a benchmark answer. 
-The other three rows are benchmark answers: screenshot + one description in, box out. 
-All three phrasings were asked and `name` is shown; averaged over the three, 
-Opus scores 91.97% centroid with 87.07% of elements passing under all three, 
-Qwen 85.99% and 75.58% (see [How much the wording matters](#how-much-the-wording-matters)). 
+Every row is a benchmark answer: screenshot + one description in, box out.
+All three phrasings were asked and `name` is shown; averaged over the three,
+GPT-5.6 scores 96.10% centroid with 93.05% of elements passing under all three,
+Opus 91.97% and 87.07%, Qwen 85.99% and 75.58% (see [How much the wording matters](#how-much-the-wording-matters)). 
 In a result file this table is `summary.by_source.gpt`; a run over the whole file also reports the all-elements figure 
 (Qwen: 83.5% centroid over 11,914).
 
@@ -160,12 +158,12 @@ By phrasing, line 7 is 89.2% / 90.5% / 86.3% for GPT-5.6, 86.8% / 89.4% / 85.9% 
 How to read it:
 
 - **A wrong XPath is final.** The fallback fires on *not answered*, never on *answered wrongly*, so line 2 is lost for good and
-  the cascade can score below the screenshot alone. It does here: Opus's screenshot answers alone are right on 92.0% of
-  these same 31,704 requests, the cascade on 87.4% — the 9.5% lost in line 2 outweighs the 3.2% the screenshot gets wrong
-  in line 5. Qwen loses the same way, 86.0% alone against 81.7% in the cascade.
-- **The screenshot half was asked only where the tree gave nothing**, for all three models, and graded by the same centroid
-  rule as the screenshot table above (`pixels` prompt). On those rows the screenshot is right 97.3% of the time for GPT-5.6,
-  90.5% for Opus and 84.3% for Qwen - the rows the tree could not name are not hard from the screenshot.
+  the cascade can score below the screenshot alone. It does here for every model: GPT-5.6's screenshot answers alone are right
+  on 96.1% of these same 31,704 requests, the cascade on 88.7%; Opus 92.0% against 87.4%; Qwen 86.0% against 81.7%. What line 2
+  loses (10.5% / 9.5% / 9.8%) outweighs what the screenshot gets wrong in line 5 (0.9% / 3.2% / 8.5%).
+- **The screenshot answers come from each model's full vision run**, graded by the same centroid rule as the screenshot
+  table above (`pixels` prompt); the cascade uses them only on the rows the tree did not answer. On those rows the screenshot 
+  is right 97.3% of the time for GPT-5.6, 90.5% for Opus and 84.3% for Qwen - the rows the tree could not name are not hard from the screenshot.
 - **Line 6 is 0 by construction, and that is the right reading for this dataset.** Every element the cascade asks about is
   on the screen, so it is in the human ground truth; "not found" is never the correct answer here, and letting the model
   decline could only turn a request in line 4 or 5 into a miss. The screenshot prompt therefore allows no "not found"
@@ -232,14 +230,13 @@ over the same 10,568 elements and the `name` phrasing as the screenshot table:
 
 |                                                                  | GPT-5.6 | Claude Opus 4.8 | Qwen2.5-VL-7B | GUI-Owl-1.5-8B |
 |------------------------------------------------------------------|---------|-----------------|---------------|----------------|
-| right element (centre inside it)                                 | 96.4%   | 91.3%           | 84.6%         | 81.8%          |
+| right element (centre inside it)                                 | 96.2%   | 91.3%           | 84.6%         | 81.8%          |
 | **wrong element** — centre inside a *different* labelled element | 1.2%    | 3.2%            | 8.5%          | 7.7%           |
-| near miss — overlaps the right element, centre just outside      | 2.2%    | 4.6%            | 4.6%          | 3.2%           |
-| empty space — centre on no labelled element                      | 0.2%    | 1.0%            | 2.3%          | 7.4%           |
+| near miss — overlaps the right element, centre just outside      | 1.8%    | 4.6%            | 4.6%          | 3.2%           |
+| empty space — centre on no labelled element                      | 0.8%    | 1.0%            | 2.3%          | 7.4%           |
 | declined — answered in prose, no box                             | 0       | 0               | 2 answers     | 0              |
 
-GPT-5.6 classifies its *label* boxes against the human's, as in the screenshot table - boxes drawn while describing the element, 
-not answers to a question — so its column is not on the same footing as the other three and reads high. 
+ 
 
 When Qwen is wrong it has mostly chosen another control; 
 Opus is wrong less often and, when it is, as likely to have drawn a loose box around the right one. 
@@ -278,9 +275,7 @@ The rows, the full answers and the arithmetic are in [`reference-results/repetit
 Every element carries three descriptions — `name`, `label`, `intent` — and every model was asked all three. 
 The screenshot table shows `name`; this section is what the other two add.
 
-The Opus, Qwen and GUI-Owl figures are on the human ground truth, over the same 10,568 elements as the screenshot table. 
-The GPT-5.6 column comes from the earlier cross-labelled run - GPT-5.6 scored against the Opus labels (`data/dataset-v1.jsonl`), and would move to the human ground truth if that run were repeated on it. 
-The finding does not depend on which answer key is used: it is about how much a model's score moves when only the wording changes.
+All four columns are on the human ground truth, over the same 10,568 elements as the screenshot table.
 
 **Note:** GUI-Owl's centroid and its IoU are answers to two different questions. 
 It is an agentic model trained to emit a click point `(x, y)`, so 84.6% of its answers carry no box at all, and only 17.9% of the boxes it does return reach IoU ≥ 0.5. 
@@ -295,9 +290,9 @@ Asked the same element three ways, every model moves more than the gap between m
 
 | Phrasing                   | example                                                    | GPT-5.6    | Opus 4.8   | Qwen2.5-VL | GUI-Owl    |
 |----------------------------|------------------------------------------------------------|------------|------------|------------|------------|
-| `name` — short common name | *the scan QR code button*                                  | 95.72%     | 91.26%     | 84.60%     | 81.76%     |
-| `label` — structural       | *the blue button with the text scan QR code*               | **96.13%** | **93.37%** | **90.17%** | **87.31%** |
-| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.00%     | 91.29%     | 83.19%     | 84.63%     |
+| `name` — short common name | *the scan QR code button*                                  | 96.19%     | 91.26%     | 84.60%     | 81.76%     |
+| `label` — structural       | *the blue button with the text scan QR code*               | **96.56%** | **93.37%** | **90.17%** | **87.31%** |
+| `intent` — functional      | *the button that lets the user scan their sign-in QR code* | 95.56%     | 91.29%     | 83.19%     | 84.63%     |
 
 All four find `label` easiest, it is the phrasing that repeats the element's visible text most often. 
 The hardest phrasing splits two and two: GPT-5.6 and Qwen on `intent`, Opus and GUI-Owl on `name` - 
@@ -319,7 +314,7 @@ Measured per element, on the screenshot:
 
 |                         | average centroid | passes under **all three** |
 |-------------------------|------------------|----------------------------|
-| GPT-5.6                 | 95.62%           | **92.48%**                 |
+| GPT-5.6                 | 96.10%           | **93.05%**                 |
 | Claude Opus 4.8         | 91.97%           | **87.07%**                 |
 | Qwen2.5-VL-7B-Instruct  | 85.99%           | **75.58%**                 |
 | GUI-Owl-1.5-8B-Instruct | 84.57%           | **72.30%**                 |

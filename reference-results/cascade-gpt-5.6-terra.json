@@ -1,18 +1,18 @@
 {
-  "note": "Tree-then-screenshot cascade for gpt-5.6-terra from the two files named, joined per (element, phrasing) by benchmark/score_cascade.py with --source gpt (10,568 elements x 3 phrasings = 31,704 rows). Lines 1-8 are counts['xml_correct' ... 'incorrect'] under overall and per phrasing under by_description. The screenshot half was consulted only where the tree gave nothing; vision_alone_* is filled only when the vision file is a full run.",
+  "note": "Tree-then-screenshot cascade for gpt-5.6-terra from the two files named, joined per (element, phrasing) by benchmark/score_cascade.py with --source gpt (10,568 elements x 3 phrasings = 31,704 rows). Lines 1-8 are counts['xml_correct' ... 'incorrect'] under overall and per phrasing under by_description. The screenshot answers come from the model's full vision run on the same ground truth. The cascade uses them only on rows the tree did not answer; vision_alone_* scores the same answers on all rows, for comparison.",
   "xml_file": "reference-results/xml-gpt-5.6-terra-3phrasing-GT-v1-human-gpt-20261003-034948.json",
   "xml_model": "gpt-5.6-terra",
   "xml_prompt": "xpath-android.txt",
   "xml_prompt_sha256": "a93444a5ee3d",
-  "vision_file": "reference-results/vision-gpt-5.6-terra-3phrasing-ONLY-FROM-xml-GT-v1-human-gpt-20261005-082111.json",
+  "vision_file": "reference-results/vision-gpt-5.6-terra-3phrasing-GT-v1-human-gpt-20261008-041207.json",
   "vision_model": "gpt-5.6-terra",
   "vision_prompt_style": "pixels",
   "source": "gpt",
   "xml_rows": 31704,
-  "vision_rows": 9944,
+  "vision_rows": 31704,
   "excluded_xml_errors": 0,
   "excluded_fall_through_no_vision_row": 0,
-  "vision_covers_all_rows": false,
+  "vision_covers_all_rows": true,
   "overall": {
     "total": 31704,
     "vision_rows_used": 9944,
@@ -47,8 +47,8 @@
     },
     "keyboard_rows_in_fall_through": 4817,
     "keyboard_rows": 5060,
-    "vision_alone_correct": null,
-    "vision_alone_accuracy": null
+    "vision_alone_correct": 30468,
+    "vision_alone_accuracy": 0.961
   },
   "by_description": {
     "0": {
@@ -86,8 +86,8 @@
       },
       "keyboard_rows_in_fall_through": 1570,
       "keyboard_rows": 1677,
-      "vision_alone_correct": null,
-      "vision_alone_accuracy": null
+      "vision_alone_correct": 10165,
+      "vision_alone_accuracy": 0.9619
     },
     "1": {
       "style": "label",
@@ -124,8 +124,8 @@
       },
       "keyboard_rows_in_fall_through": 1700,
       "keyboard_rows": 1764,
-      "vision_alone_correct": null,
-      "vision_alone_accuracy": null
+      "vision_alone_correct": 10204,
+      "vision_alone_accuracy": 0.9656
     },
     "2": {
       "style": "intent",
@@ -162,8 +162,8 @@
       },
       "keyboard_rows_in_fall_through": 1547,
       "keyboard_rows": 1619,
-      "vision_alone_correct": null,
-      "vision_alone_accuracy": null
+      "vision_alone_correct": 10099,
+      "vision_alone_accuracy": 0.9556
     }
   }
 }

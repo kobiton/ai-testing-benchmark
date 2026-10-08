@@ -1,5 +1,5 @@
 {
-  "note": "Tree-then-screenshot cascade for claude-opus-4-8 from the two files named, joined per (element, phrasing) by benchmark/score_cascade.py with --source gpt (10,568 elements x 3 phrasings = 31,704 rows). Lines 1-8 are counts['xml_correct' ... 'incorrect'] under overall and per phrasing under by_description. The screenshot half was consulted only where the tree gave nothing; vision_alone_* is filled only when the vision file is a full run.",
+  "note": "Tree-then-screenshot cascade for claude-opus-4-8 from the two files named, joined per (element, phrasing) by benchmark/score_cascade.py with --source gpt (10,568 elements x 3 phrasings = 31,704 rows). Lines 1-8 are counts['xml_correct' ... 'incorrect'] under overall and per phrasing under by_description. The screenshot answers come from the model's full vision run on the same ground truth. The cascade uses them only on rows the tree did not answer; vision_alone_* scores the same answers on all rows, for comparison.",
   "xml_file": "reference-results/xml-claude-opus-4-8-3phrasing-GT-v1-human-gpt-20261005-051520.json",
   "xml_model": "claude-opus-4-8",
   "xml_prompt": "xpath-android.txt",
