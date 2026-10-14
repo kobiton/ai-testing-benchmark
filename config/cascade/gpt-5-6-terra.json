@@ -1,0 +1,10 @@
+{
+  "model": "gpt-5.6-terra",
+  "xml_config": "config/xml/gpt-5-6-terra.json",
+  "vision_config": "config/vision/gpt-5-6-terra.json",
+  "annotation_origin": [
+    "gpt-5.6"
+  ],
+  "with_vision_alone": true,
+  "results_dir": "benchmark-results"
+}

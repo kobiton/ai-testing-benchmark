@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-testing-benchmark"
+version = "1.0.0"
+description = "Can a model find a UI element from a plain-English description? A benchmark on 841 Android screenshots, their accessibility trees and 10,568 human-verified elements."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+keywords = ["benchmark", "vision-language-model", "ui-testing", "element-localisation", "mobile", "android", "xpath"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+# The benchmark alone. Scoring a model needs nothing else.
+dependencies = [
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "tqdm>=4.66.0",
+    # One repair attempt on malformed JSON before an answer is called a parse failure.
+    "json-repair>=0.30.0",
+    # Reads image dimensions, and resizes only when max_image_dim is set.
+    "Pillow>=10.0.0",
+    # The tree track runs the model's XPath (XPath 1.0 with contains(translate(...)) and
+    # (//x)[n]) against the page-source dump; the stdlib ElementTree's XPath subset cannot.
+    "lxml>=5.0.0",
+]
+
+[project.optional-dependencies]
+# `ai-testing-benchmark pipeline` - labelling your own screenshots. Benchmarking the shipped dataset needs none of this.
+pipeline = [
+    "openai>=1.30.0",
+    "anthropic>=0.28.0",
+    # Exponential backoff on rate limits and connection errors.
+    "tenacity>=8.2.0",
+]
+
+[project.urls]
+Repository = "https://github.com/kobiton/ai-testing-benchmark"
+
+[project.scripts]
+ai-testing-benchmark = "ai_testing_benchmark.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# The tree track's default instructions file travels with the code.
+"ai_testing_benchmark.benchmark.model" = ["prompts/*.txt"]

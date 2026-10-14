@@ -3,33 +3,26 @@
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 .DS_Store
 .idea/
 .vscode/
 
-# Benchmark output. Every run writes one JSON here plus a resumable checkpoint;
-# reference numbers that are meant to be committed live in reference-results/.
+# Benchmark output. Every run writes one JSON here plus a resumable checkpoint under
+# benchmark-results/checkpoints/; the published reference figures live in results/.
 benchmark-results/
 
-# A dataset you label yourself lands in data/ next to the shipped ones, so ignore that
-# shape and name the shipped corpora as the exceptions. Without this a labelling run leaves
+# A dataset you label yourself lands in data/ next to the shipped ground truth, so ignore
+# that shape and name the shipped file as the exception. Without this a labelling run leaves
 # its output sitting in `git status` looking like something you forgot to commit.
-#
-# Three are shipped: the same 841 screenshots labelled independently by two models —
-# which is what makes the cross-score in the README reproducible — plus a human
-# adjudication of where those two labellings differ.
 data/*.jsonl
-!data/dataset-v1.jsonl
-!data/dataset-v1-gpt-5.6.jsonl
-!data/dataset-v1-human.jsonl
-!data/dataset-v1-human-gpt.jsonl
 data/*-stats.json
-!data/dataset-v1-stats.json
-!data/dataset-v1-gpt-5.6-stats.json
-!data/dataset-v1-human-stats.json
 data/checkpoints/
+!data/labels/ground-truth.jsonl
 
-# data/images/ is deliberately NOT ignored — the 841 screenshots are committed, so a
-# clone is everything you need. If a v2 corpus ever replaces them, remember that the v1
-# blobs stay in history: PNGs do not delta-compress, and the only way to drop them is a
-# force-push that breaks every existing clone and fork.
+# data/images/ and data/xml/ are deliberately NOT ignored — the 841 screenshots and their
+# page-source dumps are committed, so a clone is everything you need. If a v2 corpus ever
+# replaces them, remember that the v1 blobs stay in history: PNGs do not delta-compress, and
+# the only way to drop them is a force-push that breaks every existing clone and fork.

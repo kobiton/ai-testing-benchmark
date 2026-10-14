@@ -1,0 +1,461 @@
+"""Rebuilding a finished result by re-reading the answers it already holds.
+
+A coordinate-convention bug is a *parsing* bug: the model's own text is in `raw`, so
+re-reading it is the whole repair — 30,921 rows in about two seconds against ~10 hours
+and 85M input tokens for a re-run. Cost is not the main argument. The model is not
+deterministic, so a re-run answers afresh and nobody can then tell a harness fix from a
+model that simply replied differently; re-scoring the same `raw` proves which one moved.
+
+Only parse-family errors are re-parsed. A `timeout`, an `HTTP 500` or a
+`Truncated at max_tokens=…` describes something that happened *instead of* an answer,
+and re-parsing a truncated thinking model's reasoning prose is exactly the bug that
+recorded a Gemma run at 16%.
+"""
+import json
+import logging
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from PIL import Image
+
+from ai_testing_benchmark.benchmark.scoring.coords import _norm_dims
+from ai_testing_benchmark.benchmark.scoring.metrics import IOU_THRESHOLD, _compute_iou, _point_inside_bbox, _predicted_centroid
+from ai_testing_benchmark.benchmark.scoring.parsing import _parse_response
+from ai_testing_benchmark.benchmark.scoring.xpath import xml_prediction
+from ai_testing_benchmark.benchmark.model.xml_tree import ViewTreeStore
+from ai_testing_benchmark.benchmark.artifacts.builder import build_result
+
+logger = logging.getLogger(__name__)
+
+
+# Errors a re-parse is allowed to overturn, matched as prefixes of the recorded message.
+# Everything else — `timeout`, `HTTP 500: …`, `Truncated at max_tokens=…`, `Empty content
+# (…)`, `image not found`, a bare connection error — describes something that happened
+# *instead of* an answer, and must survive untouched.
+#
+# The truncation case is why this list exists rather than a blanket re-parse of every row
+# that has text. A thinking model that spends its budget reasoning returns prose in
+# `raw`, and handing that prose to the parser is precisely the bug that recorded a Gemma
+# run as 16% centroid accuracy. Re-parsing it here would reintroduce it, one release
+# later and much harder to see.
+_REPARSEABLE_ERROR_PREFIXES = (
+    "no coordinates in response",
+    "No valid bbox found",
+    "Missing x/y in response",
+    "Cannot parse",
+    "Partial bbox",
+    "empty response",
+)
+
+
+def _is_reparseable(error: str) -> bool:
+    """True when this row's error came from reading the answer, not from not getting one."""
+    if not error:
+        return True
+    return any(error.startswith(p) for p in _REPARSEABLE_ERROR_PREFIXES)
+
+
+def _image_dims(images_dir: str, screenshot_id: str) -> tuple[int, int]:
+    """(width, height) of a screenshot, read from its header only. (0, 0) if missing."""
+    for ext in (".png", ".jpg", ".jpeg"):
+        p = Path(images_dir) / f"{screenshot_id}{ext}"
+        if p.exists():
+            try:
+                with Image.open(p) as im:
+                    return im.size
+            except Exception as exc:
+                logger.debug("Could not read dimensions of %s: %s", p, exc)
+                return 0, 0
+    return 0, 0
+
+
+def _row_dims(row: dict, images_dir: str, max_image_dim: int, cache: dict) -> tuple[int, int]:
+    """The dimensions this row's answer was normalised against, however we can get them.
+
+    The row's own `img_w`/`img_h` first, which is why they are now recorded. Falling back
+    to the image on disk is correct only after re-applying `--max-image-dim` the way
+    `_load_image_b64` does: a run that downscaled to 1080 normalised its pixel answers
+    against 486x1080, and dividing them by the file's 1080x2400 instead would rescore the
+    run into a different, quieter version of the same class of bug this whole change is
+    about.
+    """
+    w, h = row.get("img_w") or 0, row.get("img_h") or 0
+    if w and h:
+        return w, h
+    sid = row.get("screenshot_id", "")
+    if sid not in cache:
+        cache[sid] = _image_dims(images_dir, sid)
+    w, h = cache[sid]
+    if w and h and max_image_dim and max(w, h) > max_image_dim:
+        scale = max_image_dim / max(w, h)
+        w, h = round(w * scale), round(h * scale)
+    return w, h
+
+
+def load_gt_override(path: str) -> dict:
+    """Index a dataset's boxes by (screenshot_id, element_id) for `rescore_result`.
+
+    Every key maps to a *list* of candidate rows. An id is indexed twice when it carries
+    a source prefix — `gpt-e12` is reachable as both `gpt-e12` and `e12` — because the
+    human ground truth prefixes every element with the model whose descriptions the
+    annotator read, while the run that answered those same descriptions recorded the
+    bare id its own dataset used. The bare key can collide: the same screenshot holds a
+    `gpt-e5` and an `opus-e5` that are different elements (732 such pairs in the v1 human
+    set), which is why `_resolve_gt` settles a multi-candidate key by the description
+    text rather than taking the first one. Rows without a box are skipped, exactly as
+    `_load_dataset` skips them for a live run.
+    """
+    index: dict = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            if not r.get("bbox"):
+                continue
+            sid, eid = r.get("screenshot_id", ""), str(r.get("element_id", ""))
+            index.setdefault((sid, eid), []).append(r)
+            if "-" in eid:
+                index.setdefault((sid, eid.split("-", 1)[1]), []).append(r)
+    return index
+
+
+def _resolve_gt(row: dict, index: dict, prefix: str = "") -> tuple[Optional[dict], str]:
+    """The override row for a result row, and how it was found.
+
+    With `prefix` the join is exact and nothing else: a bare `e8` is looked up as
+    `<prefix>-e8`, and a miss is a miss — the run answered that dataset's element and the
+    override dropped it (flagged `not_found` / `ambiguous` in CVAT), so no other row is
+    its answer key. This is the mode to use whenever the override mixes sources. The
+    bare-id fallback cannot be made safe there: on the v1 human set 732 screenshots hold a
+    `gpt-eN` and an `opus-eN` with the same N, sometimes with the very same description
+    (both models labelled the same link), and when the GPT element was dropped the lone
+    `opus-eN` left behind is a different control that happens to share a number.
+
+    Without a prefix: exact id first; otherwise the bare-id candidates whose description at
+    the row's index is the row's own text — the answer was to that text, so it is the only
+    key that cannot pick the wrong element. Exactly one such candidate is a match; several
+    is "ambiguous"; none is "missing". A candidate without descriptions is accepted only
+    when it is the sole one.
+    """
+    sid, eid = row.get("screenshot_id", ""), str(row.get("element_id", ""))
+    if prefix:
+        full = eid if eid.startswith(f"{prefix}-") else f"{prefix}-{eid}"
+        cands = [c for c in index.get((sid, full)) or [] if c.get("element_id") == full]
+        return (cands[0], "exact") if cands else (None, "missing")
+    cands = index.get((sid, eid)) or []
+    if not cands:
+        return None, "missing"
+    exact = [c for c in cands if c.get("element_id") == eid]
+    if len(exact) == 1:
+        return exact[0], "exact"
+    idx = row.get("description_index", 0)
+    want = row.get("description")
+    described = [c for c in cands if c.get("descriptions")]
+    if not described and len(cands) == 1:
+        return cands[0], "unique"
+    hits = [c for c in described
+            if idx < len(c["descriptions"]) and c["descriptions"][idx] == want]
+    if len(hits) == 1:
+        return hits[0], "by_description"
+    return None, "ambiguous" if len(cands) > 1 else "missing"
+
+
+def _grade(r: dict, pred_bbox, pred_point, gt: dict) -> None:
+    """Write iou / pass_iou / pass_centroid for one row against `gt`."""
+    iou = _compute_iou(pred_bbox, gt) if (pred_bbox and gt) else 0.0
+    centroid = _predicted_centroid({"pred_bbox": pred_bbox, "pred_point": pred_point})
+    r.update({
+        "iou": round(iou, 4),
+        "pass_iou": iou >= IOU_THRESHOLD,
+        "pass_centroid": bool(centroid and gt and
+                              _point_inside_bbox(centroid[0], centroid[1], gt)),
+    })
+
+
+def rescore_result(prior: dict, images_dir: str, coord_grid: int,
+                   metric: str = "", gt_override: Optional[dict] = None,
+                   gt_override_path: str = "", gt_prefix: str = "",
+                   xml_dir: str = "") -> dict:
+    """Re-score a finished result file from each row's `raw`, calling no model at all.
+
+    The fourth path into `build_result`, alongside a completed run, a stopped one and
+    `--finalize-only`. It exists because a coordinate-convention bug is a *parsing* bug:
+    the model's answers were fine and are all still there in `raw`, so fixing the parser
+    and re-reading them is the whole repair. Re-running is not merely slower — 30,921
+    calls is ~10 hours against ~2 seconds — it is *worse evidence*, because the model
+    would answer afresh and nobody could then tell a harness fix from a model that
+    happened to reply differently.
+
+    What is preserved rather than recomputed: tokens, latency, `served_model`,
+    `stopped_early`, the phrasings, and every non-parse error. Those are facts about the
+    run that happened. Only the coordinates and the pass/fail derived from them move.
+
+    With `gt_override` (from `load_gt_override`) the *answer key* moves too: every row's
+    `gt_bbox` is replaced by the override's box for the same (screenshot, element), and
+    rows whose element the override does not hold are dropped rather than graded against
+    a box nobody vetted. This is how a run that answered one model's descriptions is
+    graded on the human ground truth built from those same descriptions — the answers
+    already exist, so a new answer key costs no API call. The descriptions must be the
+    same bank: a row whose `description` is not the override's text at that index is
+    counted and warned about, because grading an answer to one question against the box
+    for another is not a rescore, it is a different benchmark.
+    """
+    rows = prior.get("results") or []
+    if not rows:
+        # Reached by pointing --rescore at a summary-only file, which the published
+        # reference results are — and the README sends readers to that directory, so this
+        # is a normal mistake and gets a sentence rather than a traceback.
+        logger.error(
+            "This file carries a summary but no `results` rows, so there is nothing to "
+            "re-score. A re-score reads each row's `raw` — the model's own text — and "
+            "parses it again; the published files in results/ are summaries "
+            "with the rows stripped, so only a result file from your own run can be "
+            "re-scored.")
+        sys.exit(1)
+
+    max_image_dim = prior.get("max_image_dim", 0) or 0
+    dim_cache: dict = {}
+    reparsed = changed = kept_error = missing_dims = 0
+
+    # An XML-track file holds XPaths in `raw`, not coordinates, and `_parse_response` would happily read the digits out of `(//android.widget.Button)[2]` as a box.
+    # Those rows go through `xml_prediction` against the same dumps the run used — or,
+    # without `--xml-dir`, keep their boxes and are only re-graded (which is all a `--rescore-gt` needs).
+    is_xml = prior.get("input") == "xml"
+    trees = ViewTreeStore(xml_dir) if (is_xml and xml_dir) else None
+    if is_xml and not trees:
+        logger.warning("XML-track result and no --xml-dir: the XPaths are not re-run, the existing boxes are re-graded as they are.")
+    missing_xml = 0
+
+    dropped_no_gt = dropped_ambiguous = description_mismatch = 0
+    out_rows = []
+    for row in rows:
+        r = dict(row)
+        if gt_override is not None:
+            human, how = _resolve_gt(r, gt_override, gt_prefix)
+            if human is None:
+                if how == "ambiguous":
+                    dropped_ambiguous += 1
+                else:
+                    dropped_no_gt += 1
+                continue
+            r["gt_bbox"] = human["bbox"]
+            # The row now describes the override's element, so it takes the override's id —
+            # `gpt-e12` rather than the bare `e12` of the run's own dataset. That is what lets
+            # `summary.by_source` see which labelling the element came from, and what keeps
+            # the ids in the file consistent with the `dataset_path` it now names.
+            r["element_id"] = human.get("element_id", r.get("element_id"))
+            idx = r.get("description_index", 0)
+            descs = human.get("descriptions") or []
+            if idx < len(descs) and descs[idx] != r.get("description"):
+                description_mismatch += 1
+        # Dropped for every row, on every path, before anything branches. Rows come from
+        # the input file, so one written while `click_inside` still existed carries it —
+        # and on the re-parse path `update()` below would leave it holding the *previous*
+        # verdict. Nothing reads it any more, and a stale field contradicting
+        # `pass_centroid` in the same row is worse than an absent one. Doing it here
+        # rather than per-branch is what stops the carried-over rows keeping it.
+        r.pop("click_inside", None)
+        raw = r.get("raw") or ""
+        if is_xml:
+            vt = trees.get(r.get("screenshot_id", "")) if trees else None
+            # Transport errors stay what they were, as on the vision path; an XML outcome is never an error, so every answered row has `error == ""` and is re-run.
+            if r.get("error") or not raw or vt is None:
+                if vt is None and trees is not None and not r.get("error") and raw:
+                    missing_xml += 1
+                else:
+                    kept_error += 1
+                if gt_override is not None:
+                    _grade(r, r.get("pred_bbox"), r.get("pred_point"), r.get("gt_bbox") or {})
+                out_rows.append(r)
+                continue
+            before = _predicted_centroid(r)
+            pred = xml_prediction(raw, vt.tree, vt.width, vt.height)
+            r.update({
+                "pred_bbox": pred["pred_bbox"], "pred_point": None,
+                "xpath": pred["xpath"], "xml_outcome": pred["xml_outcome"],
+                "xpath_matches": pred["xpath_matches"],
+                "img_w": vt.width, "img_h": vt.height, "input": "xml",
+            })
+            _grade(r, pred["pred_bbox"], None, r.get("gt_bbox") or {})
+            reparsed += 1
+            if before != _predicted_centroid(r):
+                changed += 1
+            out_rows.append(r)
+            continue
+        if not _is_reparseable(r.get("error", "")) or not raw:
+            kept_error += 1
+            if gt_override is not None:
+                _grade(r, r.get("pred_bbox"), r.get("pred_point"), r.get("gt_bbox") or {})
+            out_rows.append(r)
+            continue
+
+        img_w, img_h = _row_dims(r, images_dir, max_image_dim, dim_cache)
+        norm_w, norm_h = _norm_dims(img_w, img_h, coord_grid)
+        # With a grid in force the dimensions are not consulted at all, so a missing
+        # image is harmless — which is what makes the GUI-Owl rescore need nothing but
+        # the result file. Without one, a pixel answer cannot be normalised.
+        if not (norm_w and norm_h):
+            missing_dims += 1
+            if gt_override is not None:
+                _grade(r, r.get("pred_bbox"), r.get("pred_point"), r.get("gt_bbox") or {})
+            out_rows.append(r)
+            continue
+
+        before = _predicted_centroid(r)
+        pred_bbox, pred_point, err = _parse_response(raw, norm_w, norm_h)
+        gt = r.get("gt_bbox") or {}
+        r.update({
+            "pred_bbox": pred_bbox,
+            "pred_point": pred_point,
+            "error": err,
+            "img_w": img_w,
+            "img_h": img_h,
+        })
+        _grade(r, pred_bbox, pred_point, gt)
+        reparsed += 1
+        if before != _predicted_centroid(r):
+            changed += 1
+        out_rows.append(r)
+
+    logger.info("Re-scored %d row(s): %d re-parsed, %d prediction(s) moved, "
+                "%d error(s) left as they were", len(out_rows), reparsed, changed,
+                kept_error)
+    if missing_dims:
+        logger.warning(
+            "%d row(s) left untouched: no img_w/img_h recorded and no image on disk to "
+            "read it from, so a pixel-scale answer could not be normalised. Point "
+            "--images-dir at the screenshots, or pass --coord-grid, which needs neither.",
+            missing_dims)
+    if missing_xml:
+        logger.warning("%d row(s) left untouched: no XML dump for their screenshot in %s.",missing_xml, xml_dir)
+
+    if gt_override is not None:
+        logger.info("Ground truth replaced from %s: %d row(s) kept, %d dropped whose element it does not hold", gt_override_path, len(out_rows), dropped_no_gt)
+        if dropped_ambiguous:
+            logger.warning("%d row(s) dropped: the bare element id matched several override rows and none carried the row's description",dropped_ambiguous)
+        if description_mismatch:
+            logger.warning(
+                "%d row(s) were asked a description that is not the override's text at "
+                "the same index — the two files do not share a description bank, so "
+                "these scores compare an answer to one question against the box for "
+                "another.", description_mismatch)
+        if not out_rows:
+            raise ValueError("no result row matched an element in the override dataset")
+
+    summary = prior.get("summary") or {}
+    if gt_override is not None:
+        # The override decides which elements exist, so the counts come from what
+        # survived the join, not from the original run's summary.
+        summary = {}
+    indices = prior.get("description_indices")
+    if not indices:
+        indices = [prior.get("description_index", 0)]
+    # With an override, its boxes are the complete picture of each screenshot; the rows
+    # alone hold only the elements this run was asked about — see `_answer_classes`.
+    gt_boxes = None
+    if gt_override is not None:
+        gt_boxes = {}
+        for cands in gt_override.values():
+            for h in cands:
+                gt_boxes.setdefault(h.get("screenshot_id"), {})[str(h.get("element_id"))] = h["bbox"]
+    result = build_result(
+        results=out_rows,
+        gt_boxes=gt_boxes,
+        model=prior.get("model", ""),
+        served_model=prior.get("served_model", ""),
+        mismatch=bool(prior.get("model_mismatch")),
+        loaded_models=prior.get("loaded_models") or [],
+        metric=metric or prior.get("metric", "centroid"),
+        description_indices=indices,
+        thinking_budget=prior.get("thinking_budget", -1),
+        max_image_dim=max_image_dim,
+        max_tokens=prior.get("max_tokens", 0),
+        workers=prior.get("workers", 0),
+        temperature=prior.get("temperature", 0),
+        coord_grid=coord_grid,
+        # Off the original file, never off this process: a rescore re-parses `raw` and
+        # calls no model, so it cannot change which prompt produced these answers. A file
+        # predating the field was run when `normalized` was the only prompt, so the
+        # default states a fact rather than guessing one.
+        prompt_style=prior.get("prompt_style") or "normalized",
+        unique_elements=summary.get("unique_elements")
+        or len({(r.get("screenshot_id"), r.get("element_id")) for r in out_rows}),
+        selected_elements=summary.get("selected_elements") or len(out_rows),
+        stopped_early=bool(prior.get("stopped_early")),
+        input_mode=prior.get("input") or "screenshot",
+        xml_prompt=prior.get("xml_prompt") or "",
+        xml_prompt_sha256=prior.get("xml_prompt_sha256") or "",
+    )
+    result.pop("checkpoint_path", None)
+    # `date` is when the inference happened, and that is still the original run — the
+    # filename is stamped with it too. `build_result` set it to now, which would have
+    # made a rescore look like a fresh run of the model in every list that sorts on it.
+    result["date"] = prior.get("date") or result["date"]
+    result["dataset_path"] = prior.get("dataset_path", "")
+    if gt_override is not None:
+        result["dataset_path"] = gt_override_path
+        result["rescored_gt_from"] = prior.get("dataset_path", "")
+        result["rescored_gt_prefix"] = gt_prefix
+        result["rescored_rows_dropped_no_gt"] = dropped_no_gt
+        result["rescored_rows_dropped_ambiguous"] = dropped_ambiguous
+        result["rescored_description_mismatches"] = description_mismatch
+    # Read off the original rather than this process, which never called the endpoint and
+    # so never had the chance to have `temperature` refused.
+    result["temperature_dropped"] = bool(prior.get("temperature_dropped"))
+    result["rescored_at"] = datetime.now(timezone.utc).isoformat()
+    result["rescored_from_coord_grid"] = prior.get("coord_grid", 0) or 0
+    return result
+
+
+RESCORE_INFIX = "-RESCORED"
+_TRAILING_TS_RE = re.compile(r"-(\d{8}-\d{6})")
+
+
+_GT_SEGMENT_RE = re.compile(r"-GT-.*?(?=-RESCORED|-\d{8}-\d{6}|$)")
+
+
+def rescored_filename(original: str, gt_stem: str = "") -> str:
+    """`vision-x-20260802-124638.json` -> `vision-x-RESCORED-20260802-124638.json`.
+
+    With `gt_stem`, the `-GT-<name>` segment names the ground truth the file was graded
+    on, replacing the original's if it had one, and **no `-RESCORED-` is added**:
+    `…-GT-aya-openai-gpt-5.6-terra-20260819-…` becomes `…-GT-v1-human-20260819-…`. The
+    infix exists to keep a re-read from taking its input's name, and a different ground
+    truth already does that; what the name must still say is the run time, which stays.
+    Provenance lives in the file (`rescored_at`, `rescored_gt_from`). Same stem rule as a
+    live run: the dataset's filename without `dataset-` and `.jsonl`.
+
+    The infix goes *before* the timestamp, like `-PARTIAL-` and `-SERVED-`, so the run
+    time stays the last thing in the name. That is not cosmetic: anything reading a run's
+    date off its filename takes the last match, and stamping the rescore's own date there
+    would sort a re-read of an old file above runs that genuinely came after it, filed
+    under a day no model was called. It also keeps the pair adjacent in a sorted listing,
+    which is where you want it while deciding which number to quote.
+    """
+    stem = Path(original).stem
+    if gt_stem:
+        seg = f"-GT-{gt_stem}"
+        stem = stem.replace(RESCORE_INFIX, "")
+        if _GT_SEGMENT_RE.search(stem):
+            stem = _GT_SEGMENT_RE.sub(seg, stem, count=1)
+        else:
+            matches = list(_TRAILING_TS_RE.finditer(stem))
+            if matches:
+                last = matches[-1]
+                stem = f"{stem[:last.start()]}{seg}{stem[last.start():]}"
+            else:
+                stem = f"{stem}{seg}"
+        return f"{stem}.json"
+    if RESCORE_INFIX not in stem:
+        matches = list(_TRAILING_TS_RE.finditer(stem))
+        if not matches:
+            stem = f"{stem}{RESCORE_INFIX}"
+        else:
+            last = matches[-1]
+            stem = f"{stem[:last.start()]}{RESCORE_INFIX}{stem[last.start():]}"
+    return f"{stem}.json"

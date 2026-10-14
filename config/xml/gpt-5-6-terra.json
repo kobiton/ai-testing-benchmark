@@ -1,0 +1,37 @@
+{
+  "model": "gpt-5.6-terra",
+  "input": "xml",
+  "endpoint": {
+    "base_url": "https://api.openai.com",
+    "api_flavor": "openai",
+    "api_key_env": "OPENAI_API_KEY"
+  },
+  "dataset": {
+    "path": "data/labels/ground-truth.jsonl",
+    "annotation_origin": [
+      "gpt-5.6"
+    ],
+    "images_dir": "data/images",
+    "xml_dir": "data/xml"
+  },
+  "description_indices": [
+    0,
+    1,
+    2
+  ],
+  "coordinates": {
+    "format": "corner",
+    "grid": -1
+  },
+  "inference": {
+    "max_tokens": 2048,
+    "temperature": 0,
+    "thinking_budget": -1,
+    "max_image_dim": 0,
+    "timeout": 120,
+    "workers": 5,
+    "rpm": 60
+  },
+  "metric": "centroid",
+  "output_dir": "benchmark-results"
+}

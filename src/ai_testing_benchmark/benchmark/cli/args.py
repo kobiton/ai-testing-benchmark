@@ -1,0 +1,257 @@
+"""The command line, in one place.
+
+Separated from dispatch because the flags are the harness's public contract while what
+happens next is internal. The help text carries the reasoning for the non-obvious
+defaults (`--max-image-dim 0`, `--metric centroid`, `--description-index 0`,
+`--prompt-style pixels`, `--input screenshot`), so read it before changing one — the README calls `--help`
+the place every flag is listed.
+
+Every flag has a JSON form: `--config FILE` reads a run configuration (see
+`ai_testing_benchmark.config`) and installs its values as the defaults below, so a flag
+given on the command line still wins over the file.
+"""
+import argparse
+import os
+
+from ai_testing_benchmark.benchmark.model.client import API_FLAVORS
+from ai_testing_benchmark.benchmark.model.prompts import PROMPT_STYLES
+from ai_testing_benchmark.benchmark.model.xml_tree import DEFAULT_XML_PROMPT
+from ai_testing_benchmark.paths import resolve
+
+# Path defaults are anchored on the project root (the checkout holding `pyproject.toml`,
+# found from the working directory — see `paths.py`), not on the caller's CWD or on this
+# file, which lives wherever the package was installed.
+DEFAULT_DATASET = "data/labels/ground-truth.jsonl"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Every flag the benchmark accepts."""
+    parser = argparse.ArgumentParser(
+        prog="ai-testing-benchmark run",
+        description="Vision benchmark — natural-language element localisation")
+    parser.add_argument("--config", default="", metavar="FILE",
+                        help="A JSON run configuration (config/<track>/<model>.json). Its "
+                             "values become the defaults of every flag below, so any flag "
+                             "given here still overrides it. Unknown or missing keys stop "
+                             "the run before anything is loaded; the file never holds a "
+                             "credential — endpoint.api_key_env names the variable to read.")
+    # Defaults are absolute, anchored on the project root rather than on the caller's CWD.
+    # They used to be `../dataset-v1.jsonl`, which resolved correctly only when you had
+    # cd'd into the package directory first and otherwise produced a "dataset not found"
+    # that reads as a missing download rather than as a wrong working directory.
+    parser.add_argument("--dataset", default=str(resolve(DEFAULT_DATASET)),
+                        help="Labelled dataset to score against (default: the ground truth "
+                             "this repository ships)")
+    parser.add_argument("--annotation-origin", nargs="+", default=[], metavar="ORIGIN",
+                        help="Keep only elements whose annotation.origin is one of these "
+                             "(the shipped ground truth marks each element gpt-5.6 or "
+                             "claude-opus-4-8, after which labelling first found it). The "
+                             "published figures are over gpt-5.6, the 10,568 elements every "
+                             "model has answers for. Default: every element. Recorded in "
+                             "the result's config and in the filename.")
+    parser.add_argument("--images-dir", default=str(resolve("data/images")),
+                        help="Where the screenshots are, resolved as "
+                             "<images-dir>/<screenshot_id>.png")
+    # `--base-url` is the OpenAI-compatible name and the one the docs use; `--proxy-url`
+    # is kept as an alias so existing scripts and checkpoints keep working.
+    parser.add_argument("--base-url", "--proxy-url", dest="proxy_url",
+                        default=os.getenv("BASE_URL") or os.getenv("PROXY_URL")
+                        or "http://localhost:8080",
+                        help="Base URL of an OpenAI-compatible server; /v1/chat/completions "
+                             "is appended (/v1/messages under --api-flavor anthropic)")
+    # Empty by default, which is right for a local vLLM/llama.cpp/Ollama started without
+    # one — `_auth_headers` then sends no auth header at all. Deliberately does NOT fall
+    # back to OPENAI_API_KEY: that would forward a hosted credential to whatever
+    # --base-url happens to point at.
+    parser.add_argument("--api-key",
+                        default=os.getenv("API_KEY") or os.getenv("PROXY_API_KEY") or "",
+                        help="On the default `proxy` flavor, sent as both "
+                             "`Authorization: Bearer` and `X-API-Key`. Leave empty for a "
+                             "local server started without one — an empty value sends no "
+                             "auth header at all")
+    parser.add_argument("--model", nargs="+", default=["qwen2.5-vl"],
+                        help="Model name(s) to ask for, space-separated. Whichever model "
+                             "actually answers is recorded as `served_model`")
+    # No env fallback on purpose, unlike the pipeline's PIPELINE_WORKERS. Concurrency here
+    # is a property of the endpoint you are pointed at right now, not of your machine — a
+    # single-slot llama.cpp wants 1-3 where a vLLM deployment wants 8-16 — and `workers`
+    # rides along in every result because two runs at different values are not comparable
+    # on latency. A set-and-forget default would work against both.
+    parser.add_argument("--workers", type=int, default=3,
+                        help="Concurrent requests (default: 3). On a single-slot server "
+                             "extra workers add queue wait, not throughput; every latency "
+                             "figure in the result was measured at this value")
+    parser.add_argument("--description-index", type=int, nargs="+", default=[0],
+                        metavar="N",
+                        help="Which of the labeling pipeline's three phrasings to ask: "
+                             "0=name ('the login button'), 1=label ('the button with the "
+                             "text login'), 2=intent ('the button that will allow the "
+                             "user to login'). Several may be given — `0 1 2` scores every "
+                             "element under all three and reports them separately plus "
+                             "their agreement. Default 0 alone, which is the phrasing that "
+                             "most often repeats the element's visible text and so flatters "
+                             "a model that grounds by reading text. NOTE: --limit still "
+                             "counts elements, so N phrasings means N times the calls.")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Per-request timeout in seconds")
+    parser.add_argument("--coord-format", choices=["corner", "center"], default="corner",
+                        help="How to interpret (x,y) from the model response. "
+                             "'corner' (default) = top-left corner. "
+                             "'center' = center of element (GUI-Owl native).")
+    parser.add_argument("--metric", choices=["centroid", "iou"], default="centroid",
+                        help="Primary pass/accuracy metric. "
+                             "'centroid' (default) = centroid of predicted bbox falls "
+                             "inside the ground-truth bbox. "
+                             "'iou' = IoU(pred, gt) >= threshold. "
+                             "Both are always computed; this selects the headline number.")
+    parser.add_argument("--thinking-budget", type=int, default=-1,
+                        help="budget_tokens for chain-of-thought models (Qwen3/Gemma4). "
+                             "Set to 0 to disable thinking (faster but less accurate). "
+                             "Default -1 leaves the model's own default unchanged. Sent "
+                             "only on --api-flavor proxy, the only shape that accepts it.")
+    parser.add_argument("--max-image-dim", type=int, default=0,
+                        help="Downscale the longest side to this before sending. Default 0 "
+                             "sends the original: the benchmark's job is to measure how well "
+                             "a model can ground, and downscaling only handicaps it. Pass "
+                             "1080 to reproduce a consumer that downscales before sending, "
+                             "or a smaller value for a server whose context cannot hold a full "
+                             "screenshot (~3300 image tokens for 1080x2400).")
+    parser.add_argument("--max-tokens", type=int, default=2048,
+                        help="Output-token cap per request. Default 2048 covers thinking "
+                             "models (Gemma 4 12B reasons ~430-512 tokens before its answer, "
+                             "so 512 truncated ~half of all calls); a truncated answer is now "
+                             "recorded as an error. Raise it if a heavier model still "
+                             "truncates; direct answerers like Qwen2.5-VL are unaffected.")
+    parser.add_argument("--temperature", type=float, default=0,
+                        help="Sampling temperature. Default 0 is greedy, which is what makes "
+                             "a coordinate reproducible — llama.cpp's own default is 0.8, and "
+                             "coordinates are digit tokens where a flip turns x=432 into "
+                             "x=332. Pass -1 to send no temperature at all, for a frontier "
+                             "model that rejects it (GPT-5.x, Claude Opus 4.7+); the script "
+                             "also detects that refusal and drops it for the run by itself.")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Benchmark at most N elements (0 = all), spread evenly "
+                             "across the dataset so a pilot still covers the whole app "
+                             "mix. Deterministic: the same N every run.")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Discard the checkpoint for this dataset/model and score "
+                             "everything again. Use after changing the prompt, or when the "
+                             "earlier scores are no longer wanted. Note the checkpoint "
+                             "covers every phrasing, so this throws away the other "
+                             "phrasings' work too.")
+    parser.add_argument("--finalize-only", action="store_true",
+                        help="Write a result file from the existing checkpoint and "
+                             "exit, without benchmarking anything. Recovers a run "
+                             "that was killed before it could write its results — "
+                             "the output is marked PARTIAL. Same --dataset, --model, "
+                             "--limit, --prompt-style and --description-index as the run "
+                             "that died.")
+    parser.add_argument("--coord-grid", type=int, default=-1, metavar="N",
+                        help="Divide the model's pixel-scale answers by N on both axes "
+                             "instead of by the screenshot's dimensions, for a model that "
+                             "answers on a fixed 0-N grid. Default -1 picks it per model "
+                             "from COORD_GRIDS (GUI-Owl answers on 0-1000); pass 0 to "
+                             "force the screenshot's own pixels. Getting this wrong is not "
+                             "a small error: read as 1080x2400 pixels, GUI-Owl's grid "
+                             # `%%` because argparse runs help text through `%`-formatting;
+                             # a bare `%` here made `--help` itself raise ValueError.
+                             "scored 10.6%% where it should have scored ~88%%.")
+    parser.add_argument("--rescore", default="", metavar="RESULT.json",
+                        help="Re-score an existing result file from each row's `raw` text "
+                             "and exit, calling no model. The repair path for a parsing or "
+                             "coordinate-convention bug: the answers are already in the "
+                             "file, so nothing has to be inferred again — 30,921 rows take "
+                             "~2s against ~10h of GPU. Combine with --coord-grid. Token "
+                             "counts, latency, served_model and every non-parse error are "
+                             "carried over untouched; only the coordinates and the pass/fail "
+                             "drawn from them are recomputed. Writes a new -RESCORED- file "
+                             "and never overwrites the input.")
+    parser.add_argument("--rescore-gt", default="", metavar="DATASET.jsonl",
+                        help="With --rescore: grade the file's existing answers against "
+                             "this dataset's boxes instead of its own, joining on "
+                             "(screenshot_id, element_id) with a `gpt-`/`opus-` id prefix "
+                             "tolerated. Rows whose element the dataset lacks are dropped. "
+                             "For scoring a finished run on a ground truth that did not "
+                             "exist when it ran — the human one — without a new API call. "
+                             "The two files must share a description bank; mismatches are "
+                             "counted and warned about. Output is named -GT-<stem>-<run time>, no -RESCORED-.")
+    parser.add_argument("--rescore-gt-prefix", default="", metavar="SRC",
+                        help="With --rescore-gt: the id prefix the override dataset gives "
+                             "the elements this run answered, e.g. `gpt` when the run "
+                             "answered GPT's descriptions and the override names them "
+                             "`gpt-eN`. Makes the join exact — a bare `e8` is only ever "
+                             "`gpt-e8`, never the `opus-e8` on the same screen — and is "
+                             "the right mode whenever the override mixes sources.")
+    parser.add_argument("--api-flavor", choices=list(API_FLAVORS), default="proxy",
+                        help="Which dialect the endpoint speaks. 'proxy' (default) is the "
+                             "OpenAI request shape sent with both auth headers — vLLM, "
+                             "llama.cpp, Ollama and most gateways all take it. 'openai' is "
+                             "the same shape with a Bearer token and "
+                             "`max_completion_tokens`, which api.openai.com's current "
+                             "models require in place of `max_tokens`. 'anthropic' is the "
+                             "Messages API: different path, payload and response. NOT "
+                             "inferred from the URL, because the same base URL can front "
+                             "either shape and guessing wrong fails per element in a way "
+                             "that reads like a model problem.")
+    parser.add_argument("--prompt-style", choices=list(PROMPT_STYLES), default="pixels",
+                        help="How the model is asked for coordinates. 'pixels' (default) "
+                             "states the image size and asks for integer pixels; "
+                             "'normalized' asks for floats in [0,1] and does not state the "
+                             "size. The parser handles both. This changes the score more "
+                             "than anything else here — a model that obeys the float "
+                             "instruction can score 0%% under one and 100%% under the "
+                             "other — so it is recorded in the result and checkpoints do "
+                             "not cross between styles.")
+    parser.add_argument("--input", choices=["screenshot", "xml"], default="screenshot",
+                        help="What the model is shown. 'screenshot' (default) is the vision "
+                             "track: the image plus one description, a box back. 'xml' "
+                             "measures the other way to locate an element: the screen's "
+                             "accessibility tree, filtered of empty nodes and non-essential "
+                             "attributes, sent as text with no image; the model answers ONE "
+                             "XPath or NOT_FOUND. The XPath is run on the full tree, the "
+                             "first node's bounds become the predicted box, and the same "
+                             "centroid/IoU metrics apply. Every row records `xml_outcome` "
+                             "(answered / not_found / invalid_xpath / no_match) and none of "
+                             "those is an error, so a resume does not pay to ask again. "
+                             "Output files are named xml-<model>-… and the checkpoint is "
+                             "its own (-xml).")
+    parser.add_argument("--xml-dir", default=str(resolve("data/xml")), metavar="DIR",
+                        help="With --input xml: the UiAutomator dumps, one "
+                             "<screenshot_id>.xml per screenshot (default: the dumps this "
+                             "repository ships beside the screenshots). These cover the app "
+                             "window only — a tree read on a device also holds the "
+                             "keyboard window — so a key on the on-screen keyboard has no "
+                             "node here.")
+    parser.add_argument("--xml-prompt", default=str(DEFAULT_XML_PROMPT), metavar="FILE",
+                        help="With --input xml: a text file holding the instructions sent "
+                             "before the tree. The harness appends the filtered tree under "
+                             "'UI ELEMENT HIERARCHY:' and the description under 'USER "
+                             "DESCRIPTION:' itself. The result records the file's name and a "
+                             "hash of its text, and a checkpoint refuses to resume under a "
+                             "different prompt. Default: the file beside model/xml_tree.py.")
+    parser.add_argument("--only-from", default="", metavar="XML_RESULT.json",
+                        help="Vision track only: score just the (element, phrasing) rows this "
+                             "--input xml result did not answer (NOT_FOUND, invalid XPath, no "
+                             "match), i.e. the rows a tree-then-screenshot cascade would send to "
+                             "vision. Same prompt, checkpoint and scoring as a full run; the "
+                             "output carries -ONLY-FROM-xml in its name and records the source.")
+    parser.add_argument("--rpm", type=int, default=0, metavar="N",
+                        help="Cap request starts at N per minute across all workers "
+                             "(0 = no cap). For a paid endpoint shared with other users: "
+                             "keeps the run under the account's per-minute limit instead "
+                             "of taking all of it.")
+    parser.add_argument("--max-requests", type=int, default=0, metavar="N",
+                        help="Make at most N model calls in this invocation, then write a "
+                             "PARTIAL result and keep the checkpoint (0 = no cap). The same "
+                             "command run again carries on from there, so a large paid run "
+                             "can be spread over nights under a daily spend limit. Counts "
+                             "(element, phrasing) pairs, not elements — unlike --limit.")
+    parser.add_argument("--output-dir", default=str(resolve("benchmark-results")),
+                        help="Where result JSON files and resume checkpoints go "
+                             "(default: benchmark-results/)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Load and validate the dataset, print how many requests a real "
+                             "run would make, then stop. Contacts no endpoint and costs "
+                             "nothing. Note it checks that the images directory exists, not "
+                             "that the images are in it")
+    return parser

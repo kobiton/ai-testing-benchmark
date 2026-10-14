@@ -1,0 +1,38 @@
+{
+  "model": "claude-opus-4-8",
+  "input": "screenshot",
+  "endpoint": {
+    "base_url": "https://api.anthropic.com",
+    "api_flavor": "anthropic",
+    "api_key_env": "ANTHROPIC_API_KEY"
+  },
+  "dataset": {
+    "path": "data/labels/ground-truth.jsonl",
+    "annotation_origin": [
+      "gpt-5.6"
+    ],
+    "images_dir": "data/images"
+  },
+  "description_indices": [
+    0,
+    1,
+    2
+  ],
+  "prompt": {
+    "style": "pixels"
+  },
+  "coordinates": {
+    "format": "corner",
+    "grid": -1
+  },
+  "inference": {
+    "max_tokens": 2048,
+    "temperature": 0,
+    "thinking_budget": -1,
+    "max_image_dim": 0,
+    "timeout": 120,
+    "workers": 5
+  },
+  "metric": "centroid",
+  "output_dir": "benchmark-results"
+}

@@ -1,0 +1,1168 @@
+# Methodology — the benchmark reference
+
+Companion to the [root README](../README.md), which covers installing, getting the data and running.
+This file is the reference: what is measured and how, every flag, every field in the output, and the
+reasoning behind the parts that are not obvious. The dataset and its annotation are in
+[annotations.md](annotations.md); what the models do when they are wrong is in
+[error-analysis.md](error-analysis.md).
+
+Most sections here exist because a number was once believed that should not have been. They are
+written as warnings rather than as description for that reason.
+
+---
+
+## What is being measured
+
+Two inputs, one scoring rule. Whether the answer is a box the model drew on the screenshot or the
+bounds of the node its XPath selected, it is graded against the human's box the same way, and two
+metrics are always computed. `--metric` only picks which one is the headline:
+
+| Metric       | Pass condition                                                    |         |
+|--------------|-------------------------------------------------------------------|---------|
+| **centroid** | the centre of the predicted box falls inside the ground-truth box | default |
+| IoU          | IoU(pred, gt) ≥ 0.5                                               |         |
+
+**Centroid is the default, and the reason is not that it is easier.** It is the question an
+automated tap actually asks: would the tap land on the control? IoU asks something stricter: that
+the model also draw the same kind of box we do. Models tend to box the glyph, while our ground
+truth boxes the full control including its padding, so an element that was located correctly can
+still fail IoU. Centroid separates the two questions; IoU is carried as a secondary box-tightness
+figure, with the bias stated rather than corrected.
+
+### On the screenshot
+
+The model is shown the screenshot and one description and asked for a bounding box, nothing else.
+**The prompt deliberately states no box convention at all.** Loading the labeller's rules into it
+would coach models toward the labeller's answer and measure agreement with our annotator rather
+than element localisation. Three things about this input decide whether a number can be trusted,
+and each one cost us a run to learn: which coordinate scale the model answers on
+([coordinate space](#coordinate-space--the-same-numbers-can-mean-two-things)), how it is asked for
+the coordinates ([`--prompt-style`](#--prompt-style--the-coordinate-format-is-a-model-selection-variable-not-a-detail)),
+and that the screenshot goes out at full resolution ([image size](#image-size-and-context-limits)).
+
+### On the accessibility tree
+
+The page source is filtered — leaf nodes with no `text`, `content-desc`, `resource-id` or `hint`
+go, over-deep branches go, every attribute outside identifiers, text, state and bounds goes,
+invisible nodes stay — and sent as text with the description. The model answers **one XPath or
+`NOT_FOUND`**. The XPath is run on the *full* dump, as a driver would run it on the live tree, the
+first node it selects is taken, as a driver's find-element takes it, and that node's `bounds`
+become the predicted box. From there the centroid and IoU rules above apply unchanged.
+
+What comes back is one of four things, recorded per row as `xml_outcome`, and **none of them is an
+error**. They are what the model answered, and a resume never pays to ask again:
+
+| `xml_outcome`   | meaning                                                   | in the results tables        |
+|-----------------|-----------------------------------------------------------|------------------------------|
+| `answered`      | the XPath selected at least one node; graded on the first | right or wrong, by geometry  |
+| `not_found`     | the model said `NOT_FOUND` — the one outcome it *decided* | not answered                 |
+| `invalid_xpath` | the text does not compile as XPath 1.0                    | not answered                 |
+| `no_match`      | valid XPath, zero nodes on this tree                      | not answered                 |
+
+Two consequences for reading a tree figure. First, *not answered* mixes a decision (`NOT_FOUND`)
+with two kinds of failure a driver would also reject, which is why the tables split them. Second,
+in a tree-then-screenshot cascade every outcome but `answered` falls through to the screenshot, and
+`answered` is final whether it was right or wrong — the fallback cannot see that a selected node is
+the wrong one.
+
+**The instructions are a file, not code.** The model reads
+`src/ai_testing_benchmark/benchmark/model/prompts/xpath-android.txt` before the tree; `--xml-prompt`
+(or `prompt.xml_prompt` in a config) points a run at another file, and the harness appends the
+filtered tree and the description itself, in that order — tree first, so the ~38 requests about one
+screenshot share a cacheable prefix. Every result records the file's name and a hash of its text,
+and a checkpoint refuses to resume under a different prompt. **The packaged file is not the prompt
+the published tree figures were measured with.** That one ships inside a product and stays out of
+this repository; the default has the same shape — the role, the strict output contract, the
+grounding rules, the Android attribute priority, the ordinal pattern — in fewer words, so a run
+with it will differ from the published `xml` results by the prompt rather than by the harness.
+Request by request, with the measurements behind the caching and the prompt order, under
+[`--input xml`](#--input-xml--the-xml-track).
+
+---
+
+## Where the code is
+
+`ai-testing-benchmark` (`src/ai_testing_benchmark/cli.py`) dispatches to one package per command —
+`run` → `benchmark/cli/commands.py`, `cascade` → `benchmark/cascade_report.py`, `failures` →
+`benchmark/failures_report.py`, `pipeline` → `pipeline/cli.py` — and `config.py` beside it reads
+the JSON run configurations. Inside `benchmark/`, **the layers depend downwards only**:
+
+```
+src/ai_testing_benchmark/benchmark/
+├── cascade_report.py   joins an xml-… and a vision-… result into the tree-then-screenshot cascade
+├── failures_report.py  a result's failures, class by class, as a Markdown page
+├── cli/         args.py (every flag) · commands.py (dispatch)
+├── engine/      runner.py — thread pool, per-element step, rate pacing, stop handling
+├── artifacts/   checkpoint.py · builder.py (build_result) · rescoring.py · cascade.py (the cascade rules)
+├── model/       prompts.py · images.py · client.py · xml_tree.py — the system under test, on either input
+├── scoring/     coords.py · parsing.py · metrics.py · xpath.py — what an answer means
+└── workload/    dataset.py · phrasings.py · sampling.py — what gets scored
+```
+
+`workload` and `scoring` depend on nothing internal; `model` on `scoring`; `artifacts` on
+`scoring`, `model`, `workload`; `engine` on all of those; `cli` on the rest. **An import pointing
+the other way is what would make this circular**, so check the direction before adding one.
+
+There is no test suite. Changes are checked against behavior instead, and `--rescore` is by far
+the cheapest and strongest check: it re-reads a finished result's own answers, calls no model, and
+is deterministic, so it drives the parser, the metrics and `build_result` over every row of a real
+run in about two seconds. Compare two runs by keying rows on
+`(screenshot_id, element_id, description_index)` — `results` is in thread-completion order, so
+comparing by position reports dozens of differences on an identical build.
+
+---
+
+## Metrics
+
+Both are always computed. `--metric` only selects the headline number.
+
+| Metric       | Pass condition                                                  |         |
+|--------------|-----------------------------------------------------------------|---------|
+| **centroid** | Centre of the predicted bbox falls inside the ground-truth bbox | default |
+| iou          | IoU(pred, gt) ≥ 0.5                                             |         |
+
+Centroid is the default because it is the question a tap asks, and because IoU on this corpus is
+dominated by box-convention disagreement rather than by localization — the root README has the
+figures.
+
+**But centroid cuts both ways, so a third figure is needed to keep two models comparable.** A model
+that never returns a box cannot be judged on IoU, and a model judged only on centroid is never asked
+for the box the consumer wanted. `summary.bbox_coverage` is that figure — the share of requests that
+came back with a bounding box at all — and it factors the IoU exactly:
+
+```
+iou_accuracy = bbox_coverage x iou_accuracy_given_bbox
+```
+
+|                | centroid  | bbox_coverage | IoU given a box | = IoU |
+|----------------|-----------|---------------|-----------------|-------|
+| GUI-Owl 1.5 8B | **87.8%** | **15.1%**     | 19.4%           | 2.9%  |
+| Qwen2.5-VL     | 85.2%     | **100%**      | 49.2%           | 49.2% |
+
+Read left to right that is one sentence: GUI-Owl finds the element slightly more often, and supplies
+the box in one request out of seven. **Where the consumer requires a bounding box, coverage is a gate
+rather than a metric** — a model below it is not comparable on centroid with one above it, and the
+87.8% is not a better score than the 85.2%, it is an answer to a different question. Both figures
+were derivable from `point_only_count` before they were named, which is precisely why neither
+appeared in any earlier report.
+
+---
+
+## Which model actually answered
+
+**`--model` is a request, not a guarantee.** A server holding one weight file does not route by name:
+ask it for `gemma-4-12b` while Qwen is loaded and it returns a perfectly normal Qwen answer with no
+error. That is how two of our runs produced result files with **byte-identical predictions on all
+112 elements** — one model scored twice under two names. llama.cpp's `llama-server` and any thin
+proxy in front of a single backend behave this way; vLLM, Ollama and hosted APIs do route by name.
+
+Nothing is left for you to remember. Before scoring anything, every run:
+
+- lists what the endpoint admits to holding (`_list_loaded_models`, `GET /v1/models`);
+- sends one 16-token ping and reads the `model` field back out of the reply
+  (`_probe_served_model`) — the response's own name is the only thing that tells the truth.
+  16 rather than 1 because a reasoning model spends the cap before it emits anything, and OpenAI
+  answers a cap it cannot finish under with a **400** rather than a truncated reply: measured,
+  `max_completion_tokens: 1` is a 400 on a current GPT model and 16 is a 200;
+- records it as `served_model`, logs a loud warning when it disagrees with `--model`, and puts
+  `-SERVED-<model>` in the output filename, so a mismatched run cannot sit in a results directory
+  looking like the model you asked for;
+- refuses outright when several `--model` names are given and the endpoint has exactly one loaded,
+  since that would produce N identically-scored files and a comparison table of one model against
+  itself.
+
+The served name is also what picks the coordinate grid (see below), which is why the probe happens
+before the run rather than being an optional pre-flight: on a single-model endpoint the served id,
+not the requested one, is the fact that decides how its answers must be read.
+
+---
+
+## All arguments
+
+Every flag below has a JSON form. `--config FILE` reads a run configuration — model, endpoint,
+dataset selection, phrasings, prompt, coordinate convention, inference limits — and installs its
+values as the defaults, so a flag typed on the command line still wins over the file. Unknown or
+missing keys stop the run before anything is loaded; the file never holds a credential (it names
+the environment variable). The shipped files under `config/` are the configurations the published
+results were made with, and [`config/README.md`](../config/README.md) is the schema.
+
+| Argument              | Default                                        | Description                                                                                                                                                                                                                                                    |
+|-----------------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--config`            | —                                              | A JSON run configuration whose values become the defaults of every flag here; see above                                                                                                                                                                        |
+| `--dataset`           | `data/labels/ground-truth.jsonl`               | Path to the labelled dataset                                                                                                                                                                                                                                   |
+| `--annotation-origin` | all elements                                   | Keep only elements whose `annotation.origin` is one of the given values (`gpt-5.6`, `claude-opus-4-8`). The published figures are over `gpt-5.6`, the 10,568 elements every model has answers for; the selection is recorded in the result and in the filename |
+| `--images-dir`        | `data/images`                                  | Directory of screenshots                                                                                                                                                                                                                                       |
+| `--base-url`          | `$BASE_URL` or `http://localhost:8080`         | Base URL of an OpenAI-compatible server. `--proxy-url` is an alias                                                                                                                                                                                             |
+| `--api-key`           | `$API_KEY`, else empty                         | On the default flavor, sent as both `Authorization: Bearer` and `X-API-Key`; omitted entirely when empty                                                                                                                                                       |
+| `--api-flavor`        | `proxy`                                        | Which dialect the endpoint speaks: `proxy`, `openai` or `anthropic`. **Never inferred from the URL** — see below                                                                                                                                               |
+| `--prompt-style`      | `pixels`                                       | How coordinates are asked for: `pixels` (states the image size, asks for integers) or `normalized` (floats in [0,1]). Changes the score more than anything else here — see below                                                                               |
+| `--model`             | `qwen2.5-vl`                                   | Model name(s) — space-separated for several                                                                                                                                                                                                                    |
+| `--metric`            | `centroid`                                     | Primary metric: `centroid` or `iou`                                                                                                                                                                                                                            |
+| `--workers`           | `3`                                            | Concurrent requests                                                                                                                                                                                                                                            |
+| `--description-index` | `0`                                            | Which phrasing(s) to ask: `0`=name, `1`=label, `2`=intent. Takes several — `0 1 2` scores every element under all three                                                                                                                                        |
+| `--timeout`           | `120`                                          | Per-request timeout in seconds; thinking models need 120s+                                                                                                                                                                                                     |
+| `--coord-format`      | `corner`                                       | How to read `(x, y)`: `corner` = top-left, `center` = element centre                                                                                                                                                                                           |
+| `--thinking-budget`   | `-1`                                           | `budget_tokens` for CoT models; `0` disables thinking, `-1` leaves the model default. Sent on `--api-flavor proxy` only                                                                                                                                        |
+| `--max-image-dim`     | `0`                                            | `0` sends the original. **Not a benchmark setting** — see below                                                                                                                                                                                                |
+| `--max-tokens`        | `2048`                                         | Output cap. A truncated answer is recorded as an error, not a bbox                                                                                                                                                                                             |
+| `--temperature`       | `0`                                            | Greedy, so a coordinate is reproducible. `-1` sends none                                                                                                                                                                                                       |
+| `--limit`             | `0`                                            | Score at most N **elements**, spread evenly across the dataset. Deterministic                                                                                                                                                                                  |
+| `--coord-grid`        | `-1`                                           | Divide pixel-scale answers by N on both axes. `-1` picks it per model from `COORD_GRIDS`; `0` forces the screenshot's own pixels                                                                                                                               |
+| `--no-resume`         | off                                            | Discard the checkpoint and score everything again                                                                                                                                                                                                              |
+| `--finalize-only`     | off                                            | Write a `PARTIAL` result from the existing checkpoint and exit — calls no model                                                                                                                                                                                |
+| `--rescore`           | —                                              | Re-score a finished result file from its own `raw` text and exit. Calls no model                                                                                                                                                                               |
+| `--input`             | `screenshot`                                   | What the model is shown. `screenshot` is the vision track. `xml` is the tree track: the accessibility tree, filtered, sent as text with no image; the model answers one XPath or `NOT_FOUND`. Output files are `xml-…`, the checkpoint is its own. See below   |
+| `--xml-dir`           | `data/xml`                                     | With `--input xml`: the UiAutomator dumps, `<screenshot_id>.xml`. App window only — a tree read on a device also has the keyboard                                                                                                                              |
+| `--xml-prompt`        | the packaged `model/prompts/xpath-android.txt` | With `--input xml`: the instructions sent before the tree, as a text file; the harness appends the tree and the description. Swap in your own; the result records the file's name and a hash of its text. See below                                            |
+| `--only-from`         | —                                              | Vision track only: score just the rows this `--input xml` result did not answer (`NOT_FOUND`, invalid XPath, no match), the rows a tree-then-screenshot cascade sends to vision. Output gains `-ONLY-FROM-xml` and records the source. See below               |
+| `--rpm`               | `0`                                            | Cap request starts at N per minute across all workers (`0` = none). Keeps a paid run under the account's per-minute limit, which other users share. See below                                                                                                  |
+| `--max-requests`      | `0`                                            | Make at most N model calls this invocation, then write a `PARTIAL` result and keep the checkpoint (`0` = none). Counts (element, phrasing) pairs, unlike `--limit`. Re-run the same command to carry on. See below                                             |
+| `--output-dir`        | `benchmark-results/`                           | Where result JSON files go                                                                                                                                                                                                                                     |
+| `--dry-run`           | off                                            | Validate the dataset without calling the API                                                                                                                                                                                                                   |
+
+Path defaults, and relative paths in a config, are anchored on the project root — the nearest
+directory at or above the working directory holding this repository's `pyproject.toml` — so
+`ai-testing-benchmark run` works from anywhere in the tree, and `AI_TESTING_BENCHMARK_ROOT`
+points it elsewhere.
+
+### What the output filename tells you
+
+Everything that makes a number mean something other than "this model, this dataset, all of it" is
+in the name, because a results directory is read as a list of filenames:
+
+```
+vision-<model>[-Nphrasing][-SERVED-<x>][-PARTIAL][-PILOT-<n>][-ONLY-FROM-xml]-GT-<dataset>-<timestamp>.json
+xml-<model>[-Nphrasing][-SERVED-<x>][-PARTIAL][-PILOT-<n>]-GT-<dataset>-<timestamp>.json
+```
+
+The prefix is the strategy: `vision-` for a screenshot run, `xml-` for a tree run (`--input xml`).
+Everything after it is spelled the same way, so the two never sort into each other.
+
+| infix            | when                                                                                                     |
+|------------------|----------------------------------------------------------------------------------------------------------|
+| `-Nphrasing`     | more than one `--description-index`; the headline averages them                                          |
+| `-SERVED-<x>`    | the endpoint answered as a different model than `--model` asked for                                      |
+| `-PARTIAL`       | the run was stopped or rebuilt with `--finalize-only`                                                    |
+| `-PILOT-<n>`     | `--limit` cut the run short of the dataset; `n` is how many elements it covers                           |
+| `-ONLY-FROM-xml` | `--only-from` restricted the run to the rows an XML result did not answer — not a sample, the hard third |
+| `-RESCORED`      | written by `--rescore`, from an existing file's own answers                                              |
+| `-GT-<dataset>`  | **always** — which ground truth the score is against                                                     |
+
+`-GT-` is unconditional because there is no single obvious ground truth to stay quiet about:
+`--dataset` points at the shipped corpus by default but at whatever you labelled yourself the
+moment you use the pipeline. Every infix goes *before* the timestamp, so the run time stays the
+last thing in the name and a listing sorted by it stays sorted by when the model was called.
+
+---
+
+## `--api-flavor` — three dialects, chosen explicitly
+
+| flavor            | endpoint                          | path                   | auth                              | output cap              |
+|-------------------|-----------------------------------|------------------------|-----------------------------------|-------------------------|
+| `proxy` (default) | vLLM, llama.cpp, Ollama, gateways | `/v1/chat/completions` | `Bearer` **and** `X-API-Key`      | `max_tokens`            |
+| `openai`          | api.openai.com                    | `/v1/chat/completions` | `Bearer`                          | `max_completion_tokens` |
+| `anthropic`       | api.anthropic.com                 | `/v1/messages`         | `x-api-key` + `anthropic-version` | `max_tokens`            |
+
+**It is never inferred from the URL.** The same base URL can front either shape, and a wrong guess
+fails per element in a way that reads like a model problem rather than a config one. The default
+sends both auth headers precisely so that no flag is needed for the self-hosted case: a server that
+does not recognise one simply ignores it, and an empty `--api-key` sends neither.
+
+**Two of these were found only by calling the real API, and a stub cannot find them** — a stub
+encodes the same assumption the code does, so it passes and proves nothing:
+
+- **OpenAI renamed the output cap.** Its current models answer `max_tokens` with *"Unsupported
+  parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead."*
+  vLLM and llama.cpp know only the old name and Anthropic requires it, so the key is split per
+  flavor rather than renamed globally.
+- **The served-model probe needs headroom.** It used to ask for 1 token, which is fine on llama.cpp
+  and a **400** on a reasoning model, because OpenAI refuses a cap it cannot finish under rather
+  than truncating.
+
+Anthropic differs in everything, and three details are load-bearing:
+
+- The system prompt is top-level `system`, not a message, and the image is
+  `{"type": "image", "source": {...}}` rather than an `image_url`.
+- **`budget_tokens` is not sent**, on `anthropic` *or* `openai`. Anthropic spells thinking
+  `{"thinking": {...}}` and OpenAI rejects an unrecognized argument outright, so leaving it in
+  would turn `--thinking-budget` into a 400 on every element. It goes to `proxy` only, which is the
+  only place it ever did anything.
+- `stop_reason: "max_tokens"` is mapped onto `finish_reason: "length"` so the truncation guard
+  covers it — the guard being what stops a thinking model's prose reaching the parser and being
+  scraped into a bounding box.
+- Anthropic reports cache reads *outside* `input_tokens`, so they are added back. Without that a
+  cached element looks cheaper than it was, and the token totals are what a cost comparison is read
+  off.
+
+**A full run against a hosted model is real money.** 10,307 elements at three phrasings is 30,921
+requests, and the image is essentially the whole input at ~3,500 tokens each. Pilot with
+`--limit 200` first; it is deterministic and evenly spread, so the pilot and the full run are
+comparable.
+
+---
+
+## `--prompt-style` — the coordinate format is a model-selection variable, not a detail
+
+Two wordings of the same request, both in `model/prompts.py`:
+
+| style              | asks for                                | states image size |
+|--------------------|-----------------------------------------|-------------------|
+| `pixels` (default) | integers in the screenshot's own pixels | yes               |
+| `normalized`       | floats in `[0,1]`                       | no                |
+
+The harness used to ask for floats and state no size. That is a fine request for a model that
+ignores it — Qwen2.5-VL answers in pixels regardless, 5 of 6 raws on a pilot, and the parser
+rescales — and a ruinous one for a model that obeys.
+
+| 10-element control, one frontier model   | centroid  | median `dy` | median `dx` | box height vs GT |
+|------------------------------------------|-----------|-------------|-------------|------------------|
+| `normalized` — floats, no image size     | **0/10**  | +0.0988     | +0.0256     | 1.41×            |
+| `normalized` + the one `IMAGE SIZE` line | 4/10      | +0.0124     | +0.0256     | —                |
+| `pixels` — integers, image size stated   | **10/10** | +0.0025     | +0.0002     | 0.82×            |
+
+Read the `dx` column against the `dy` one: stating the size fixes most of the *vertical* error and
+does not touch the *horizontal* one at all; asking for integers fixes both.
+
+Ten elements is enough to explain a bad score and to justify changing the default; it is not a
+measurement. So the same model was re-run over **200 elements × 3 phrasings = 600 requests**,
+against the GPT-5.6 labelling (`data/dataset-v1-gpt-5.6.jsonl`, kept at git tag `v1`) — the second
+labelling, so the model is not scored on its own output — changing nothing but the coordinate format:
+
+| same 200 elements, same ground truth | centroid   | IoU ≥ 0.5  | mean IoU  | median `dy` | box height vs GT |
+|--------------------------------------|------------|------------|-----------|-------------|------------------|
+| `normalized`                         | 7.79%      | 2.27%      | 0.047     | +0.0816     | 1.69×            |
+| `pixels`                             | **90.33%** | **61.67%** | **0.547** | +0.0004     | 0.99×            |
+
+No errors, and a bounding box on 100% of requests, in **both** runs. The model was answering every
+time; under one prompt it was answering in a frame it had never been given.
+
+**It held at full scale.** The same model over the whole corpus under `pixels` — 31,941 requests,
+zero errors — scores **91.97% centroid / 62.35% IoU** with a median positional error under 0.001 of
+the screen on both axes. That is the `Claude Opus 4.8` row in the root README, so the 7.79% above
+was the prompt and nothing else. A 200-element pilot predicted it to within half a point, which is
+the argument for piloting rather than for trusting a pilot's third decimal.
+
+Both halves of the comparison are reproducible from a clone (the human ground truth stands in for
+the label file the pilot used; `git checkout v1 -- data/dataset-v1-gpt-5.6.jsonl` restores that one):
+
+```bash
+ai-testing-benchmark run --config config/vision/claude-opus-4-8.json \
+    --limit 200 --prompt-style normalized
+
+# then the same command with --prompt-style pixels; the checkpoint forks by style,
+# so the second run pays for itself rather than resuming the first
+```
+
+**Do not generalise it to the other model in that table.** GPT-5.6 was measured under `pixels`
+throughout and has not been run under `normalized` at full scale, so nothing here says how much it
+would lose. Two frontier models need not respond to the format the same way — which is exactly why
+the style is a flag and is recorded in every result rather than being decided once.
+
+Two facts kept this from being read as *"that model is bad at grounding"*, and both are worth
+reproducing before anyone reports on a model from this harness:
+
+- The labelling pipeline (`pipeline/step2_detect_bboxes.py`) asks the **same model** for pixel
+  integers and gets labels that agree with an independent labeller's to four decimals. Same model,
+  same screenshots, different question.
+- The fault splits in two, per the table above, and neither half alone accounts for the result. A
+  single-variable story would have been wrong, which is why the fix was to switch prompts rather
+  than add a line to the existing one. The control row is not in the code — it is a diagnostic,
+  not something to benchmark under — but it is a two-line insertion described above
+  `PROMPT_STYLES` if it ever needs reproducing.
+
+Consequences that are easy to get wrong:
+
+- **The two published open-weight numbers are not understated.** Qwen's 85.19% and GUI-Owl's 87.80%
+  were measured under `normalized`, but Qwen ignores the instruction, so its number is unaffected.
+  GUI-Owl answers on a 0–1000 grid and **has not been measured under `pixels`** — pilot before
+  assuming either way. The GPT-5.6 row beside them was measured under `pixels`, which is why the
+  results table carries a column saying so.
+- **`prompt_style` is recorded in every result, and defaulted nowhere it describes history.** The
+  runtime default is `pixels`; the fallbacks that describe an *existing* artifact (`--rescore`, the
+  `--finalize-only` header read) stay `normalized`, because a file predating the flag can only have
+  come from the one prompt there was. `build_result` takes it as a **required keyword-only**
+  argument for the same reason — any default there would stamp a guess into an artifact as fact.
+- **Checkpoints fork by style.** Sharing one would let a second run under another style resume from
+  the first, skip every element and report the first run's predictions as its own — visible only as
+  "N already scored". `normalized` maps to no suffix, so any checkpoint written before the flag
+  existed keeps its path.
+
+---
+
+## Interrupting, resuming, recovering
+
+### Resuming
+
+Every scored `(element, phrasing)` pair is appended to
+`<output-dir>/checkpoints/<dataset>-<model>[-<prompt-style>].partial.jsonl` as it finishes, so a
+kill, a crash or a sleeping laptop costs only the pairs in flight. **To continue, re-run the same
+command** — same dataset, model and prompt style:
+
+```
+INFO Resuming from .../dataset-v1-qwen2.5-vl-pixels.partial.jsonl — 6218 (element, phrasing) pair(s) already scored
+INFO   6218 already scored, 4089 to go
+```
+
+Five rules that are not obvious:
+
+- **Errored elements are not checkpointed**, so a resume retries them. Freezing a transient timeout
+  into the score as a permanent failure would understate the model. Whatever still errors on the
+  final pass is reported as an error. A run that had errors keeps its checkpoint so the next one
+  retries just those.
+- **Swapping the loaded model and resuming is refused.** The checkpoint header pins the model that
+  actually answered; resuming under a different one would blend two models into one score. Re-load
+  that model, or pass `--no-resume`.
+- **`--limit` is not part of the checkpoint identity.** An even-stride subset is drawn from the same
+  rows, so a 2,000-element pilot's scores are reused by a later full run rather than thrown away.
+- **Neither is `--description-index`.** The phrasing is part of each row's key instead, so scoring
+  `name` today and `0 1 2` tomorrow pays only for `label` and `intent`. It used to be a `-d0` suffix
+  on the filename, which made the second run open a different file and re-score all 10,307 `name`
+  elements it already had.
+- **`--prompt-style` *is*, and so is `--coord-grid`.** Those rows are not reusable — they came from
+  a different question, or were normalised under a different convention — and no field on a row says
+  which. The style forks the filename; a grid mismatch is refused outright with the fix in the error.
+
+### Stopping a run and keeping its score
+
+Resuming assumes you will finish. Often you will not: the model is clearly bad, or you have seen
+enough of a 30,000-request run. Stopping used to leave the checkpoint but **no result file**, and the
+result file is the artifact.
+
+**SIGTERM or the first Ctrl+C winds the run-down instead of killing it.** The queue is cancelled,
+requests already in flight are allowed to land, and a result file is written with `-PARTIAL-` in its
+name and `"stopped_early": true` inside. Send the signal a second time to exit immediately — worth
+knowing, because "in flight" is up to one `--timeout` per worker.
+
+`summary.selected_elements` and `summary.completed_fraction` record how much of the run actually
+happened. **Read them:** every accuracy in the file is over the elements that were scored, not over
+the dataset, so a run stopped at 12% looks exactly as confident as one that finished.
+
+A partial run's checkpoint is always kept, so re-running carries on rather than paying twice.
+
+### Pacing a paid run — `--rpm` and `--max-requests`
+
+A full run over the human ground truth is 31,704 requests on the vision track and the same again on the XML track.
+Against a paid endpoint that is two separate problems, and the two flags answer one each:
+
+- **The account's per-minute limit is shared with everyone else using it.** `--workers 5` sends as fast as the endpoint answers,
+  which on a hosted API is fast enough to take the whole limit and hand everyone else `429`s, including this run's own retries.
+ `--rpm 60` spaces request *starts* at least one second apart across all workers — a ceiling, not an average, so there is no burst. 
+  Retries inside a request are not paced; they are the endpoint already saying wait, and an `--rpm` under the limit is what keeps them rare.
+- **The account's spend limit is per day or per month.** `--max-requests 3000` makes at most that many model calls, then ends the way a Ctrl+C does: 
+  a `-PARTIAL-` result, the checkpoint kept, `completed_fraction` below 1. The same command the next night resumes and scores the next 3,000.
+  Nothing is bought twice, and the nightly number is the one the budget owner set, not an element count that multiplies by the phrasings behind their back.
+
+```bash
+# every night, the same line, until a run ends without -PARTIAL-
+ai-testing-benchmark run --input xml --model gpt-5.6-terra --api-flavor openai \
+    --base-url https://api.openai.com --api-key "$OPENAI_API_KEY" \
+    --dataset data/labels/ground-truth.jsonl --annotation-origin gpt-5.6 \
+    --description-index 0 1 2 --workers 5 --rpm 60 --max-requests 3000
+```
+
+Pairs are ordered screenshot-major, so a cut after N requests keeps every phrasing of the screenshots it took and the cached prefix they share.
+Neither flag changes the score: a run done in ten capped invocations and one done in a single sitting produce the same rows, only the last file's name differs. 
+Neither counts HTTP attempts, and `0` means no cap.
+
+### Recovering a run that was killed outright
+
+A crash, an OOM kill or a Ctrl+C that reaches the whole process group leaves the checkpoint but no
+result file and no chance to wind down. Rebuild the result from what is on disk — no model is called
+and nothing is charged:
+
+```bash
+ai-testing-benchmark run --finalize-only --model qwen2.5-vl
+```
+
+Pass the same `--dataset`, `--model`, `--limit` and `--prompt-style` as the run that died; those
+identify its checkpoint. `--description-index`, `max_tokens`, `workers`, `coord_grid`,
+`prompt_style` and `served_model` are then read back out of the checkpoint *header* rather than the
+command line, because the values that shaped those predictions are the dead run's, not whatever the
+flags say at recovery time.
+
+---
+
+## Coordinate space — the same numbers can mean two things
+
+A model that grounds an element answers with numbers. **Which scale those numbers are on is a
+property of the model, and it is not recoverable from a single answer.** On a 1080×2400 screenshot
+`[67, 91]` is a legal pixel pair *and* a legal point on a 0–1000 grid, and the two readings are 2.4×
+apart on the y axis.
+
+Qwen2.5-VL answers in the screenshot's pixels. **GUI-Owl answers on a 0–1000 grid** — it is a
+Qwen-VL-family model and inherits that convention. Reading its grid values as pixels shrinks x by
+1.08× and y by 2.4×, which produced this:
+
+| GUI-Owl, 30,921 answers      | centroid   | IoU≥0.5 |
+|------------------------------|------------|---------|
+| as recorded (read as pixels) | **10.56%** | 0.95%   |
+| re-scored on the 0–1000 grid | **87.80%** | 2.93%   |
+
+Nothing in that run looked wrong: 30,921 rows, 4 errors, every answer short and well-formed,
+`clamped_pred_count` at 0.6%. The run was clean and the number it reported was a property of the
+harness. Three rules follow, and they are the whole design:
+
+- **`COORD_GRIDS` (in `scoring/coords.py`) is an explicit per-model table, matched on the requested
+  *and* served name.** Never
+  inferred per answer. A single-model endpoint ignores the name it is asked for, so the served id
+  decides — the same reason `_probe_served_model` exists.
+- **The grid is implemented by handing it to the parser as both dimensions** (`_norm_dims`). There is
+  no second code path, so the pixel and grid readings cannot drift apart, and the "already in [0,1]"
+  branches keep working — load-bearing, because GUI-Owl mixes normalised floats
+  (`[0.19, 0.81, 0.81, 0.85]`) into the same run as grid integers (`[67, 91]`).
+- **1000, not 999.** Both fit; the sweep gives 85.62% at /1000 against 85.91% at /999. 1000 is the
+  documented Qwen-VL convention and 999 is merely the value that scores highest on this dataset.
+  Fitting a constant to the benchmark it is then evaluated on is not worth 0.29pp.
+
+`coord_grid` is recorded in every result and pinned in the checkpoint header. Resuming a checkpoint
+under a different grid is **refused**, not silently blended: no field on a row says which convention
+produced it, so a mixed file is undetectable afterwards.
+
+### `summary.scale_check` — the aggregate tell
+
+Every guard that looks at answers one at a time is blind here, because a grid value and a pixel value
+are individually indistinguishable. The tell exists only in aggregate: over thousands of rows a model
+that finds elements at all must scatter its answers roughly the way the targets are scattered, so
+`scale_check` compares the median predicted centroid against the median ground-truth centroid per
+axis.
+
+```
+GUI-Owl as recorded   x_ratio 0.924   y_ratio 0.441   axes_disagree true    suspect TRUE
+GUI-Owl re-scored     x_ratio 0.998   y_ratio 0.981   axes_disagree false   suspect false
+Qwen2.5-VL            x_ratio 1.009   y_ratio 0.977   axes_disagree false   suspect false
+```
+
+Axis *disagreement* is the sharper of the two signals, because one wrong divisor hits the longer side
+harder — 1.08× on x against 2.4× on y. A model with an honest bias toward the top of the screen is
+wrong in the same direction on both axes. Below `SCALE_CHECK_MIN_ROWS` (100) the numbers are reported
+but no verdict is reached.
+
+**It flags and never corrects.** Guessing a convention from a statistic and applying it silently is
+how this harness produced its worst data; a wrong guess would be indistinguishable from a right one
+downstream.
+
+**Its sensitivity depends on aspect ratio, so a quiet result is not a clean bill of health.** The
+signal is the gap between the true divisor and the one used: on a 1080×2400 screenshot a 0–1000 grid
+is 2.4× out on y and the check screams, but on a near-square 862-tall screenshot it is 0.86× out —
+inside the band, no verdict. Treat `suspect: false` as "no evidence here", and settle a model's
+convention from `COORD_GRIDS` or its model card, not from one run's check.
+
+---
+
+## `--rescore` — repair a result without re-running it
+
+A coordinate-convention bug is a *parsing* bug. The model's answers were fine and are all still in
+`raw`, so fixing the parser and re-reading them is the entire repair:
+
+```bash
+ai-testing-benchmark run \
+    --rescore benchmark-results/vision-gui-owl-1.5-8b-20260802-124638.json
+# 30,921 rows re-scored in 1.9s — centroid 10.56% -> 87.80%
+```
+
+The fourth path into `build_result`, alongside a completed run, a stopped one and `--finalize-only`,
+so its output is shape-identical. Re-running instead would cost **~10 hours and 85M input tokens** —
+but the real argument is evidence, not cost: the model is not deterministic, so a re-run answers
+afresh and nobody can then tell a harness fix from a model that happened to reply differently.
+Re-scoring the same `raw` proves which one moved.
+
+- **Carried over untouched:** tokens, latency, `served_model`, `stopped_early`, the phrasings, `date`
+  (when the inference happened), and **every non-parse error**. Only the coordinates and the pass/fail
+  drawn from them are recomputed.
+- **Only parse-family errors are re-parsed** (`_REPARSEABLE_ERROR_PREFIXES`). A timeout, an HTTP 500,
+  an `image not found` or a `Truncated at max_tokens=…` describes something that happened *instead of*
+  an answer. The truncation case is why the list exists rather than a blanket re-parse: a thinking
+  model that spends its budget leaves reasoning prose in `raw`, and handing that to the parser is
+  exactly the bug that recorded one run at 16%.
+- **Never overwrites the input.** Output carries a `-RESCORED-` infix *before* the timestamp, like
+  `-PARTIAL-` and `-SERVED-`, so the run time stays the last timestamp in the name.
+- **Dimensions come from the row's own `img_w`/`img_h` first**, then from the image on disk with
+  `--max-image-dim` re-applied. With a `--coord-grid` in force they are not consulted at all, so a
+  grid rescore needs nothing but the result file.
+
+Proof the path is faithful: re-scoring the Qwen2.5-VL run with the pixel reading it already used
+moved **0 of 30,921 predictions** and reproduced every figure exactly (centroid 85.19% → 85.19%, IoU
+49.19% → 49.19%). Worth repeating after any parser change.
+
+---
+
+## `--input xml` — the XML track
+
+A natural-language locator can find an element two ways. Everything above this section measures the first: show the model the screenshot, get a box.
+The second never looks at the image: the screen's accessibility tree is filtered, sent as text with the description, and the model returns **one XPath or `NOT_FOUND`**, which a WebDriver client then runs on the device. 
+`--input xml` measures how well a model does that, on the same elements, the same descriptions and the same ground truth:
+
+```bash
+ai-testing-benchmark run --input xml \
+    --base-url http://localhost:8000 --model qwen2.5-vl \
+    --dataset data/labels/ground-truth.jsonl --annotation-origin gpt-5.6 --description-index 0 1 2 --limit 200
+```
+
+The dumps are shipped: `data/xml/<screenshot_id>.xml`, one per screenshot, the default `--xml-dir`.
+A text model is enough — the screenshot is never opened — so a model with no vision at all can be scored on this track.
+
+What one request is:
+
+1. The screenshot's dump is filtered (`src/ai_testing_benchmark/benchmark/model/xml_tree.py`): leaf nodes with no `text` / `content-desc` / `resource-id` / `hint` go, over-deep branches go,
+   every attribute outside the essential set (identifiers, text, state, bounds) goes. Invisible nodes stay.
+2. The instructions file (`--xml-prompt`), the filtered tree under `UI ELEMENT HIERARCHY:` and the
+   description under `USER DESCRIPTION:` go out as text with **no image** — instructions and tree
+   as the system message, the description as the user message.
+3. The reply is stripped of a code fence or backticks, then run as XPath 1.0 against the **full** dump (`lxml`; a driver runs it on the live tree, which knows nothing of the filter).
+   The **first** matching node is taken, as a driver's find-element takes it.
+4. That node's `bounds` become `pred_bbox`, and the centroid and IoU metrics apply unchanged. `xpath` is in the file beside `raw`.
+
+Every row records `xml_outcome`, and **none of these four is an `error`** — they are what the model answered, and a resume must not pay to ask again:
+
+| `xml_outcome`   | meaning                                              | `answer_class`        |
+|-----------------|------------------------------------------------------|-----------------------|
+| `answered`      | the XPath selected ≥ 1 node; graded on the first one | by geometry, as usual |
+| `not_found`     | the model said `NOT_FOUND`                           | `declined`            |
+| `invalid_xpath` | the text does not compile as XPath 1.0               | `non_answer`          |
+| `no_match`      | valid XPath, zero nodes on this tree                 | `non_answer`          |
+
+`summary.xml_outcomes` counts them — `answered_correct` / `answered_incorrect` by the centroid rule,
+the three not-answered kinds separately and summed as `not_answered` — per file and per phrasing.
+Those are the buckets an XML-then-vision cascade is counted in: everything but `answered` falls through to vision.
+
+**The prompt.** The default file, `src/ai_testing_benchmark/benchmark/model/prompts/xpath-android.txt`, has the shape a
+production locator's prompt has — the role, the strict output contract (one XPath or `NOT_FOUND`,
+nothing else), the grounding rules, the Android attribute priority, the ordinal pattern — in fewer
+words. It is **not** the prompt our reference `xml-…` figures were measured with: that one ships
+inside a product and is not in this repository, so a run with the default here will differ from
+the published numbers by the prompt, not by the harness. Every result records the prompt's file
+name and a hash of its text (`xml_prompt`, `xml_prompt_sha256`), so two files can always be told
+apart. To measure with your own, write the instructions to a file and pass `--xml-prompt`; the
+harness appends the tree and the description itself, in that order.
+
+Two things about the input are worth knowing, and both are in the file:
+
+- **The tree.** A locator running on a device reads every window on screen except the system
+  bars, so the on-screen keyboard is part of its tree. The dumps here are the UiAutomator page
+  source captured beside each screenshot and cover the app window only. Same attribute vocabulary,
+  not the same bytes: a key on the keyboard has no node here and would on a device, so about
+  1,700 of the 10,568 human-ground-truth elements will come back `not_found` for a reason that is
+  the data's, not the model's. Report them as such.
+- **The prompt order.** The prompt's original layout puts the description *before* the tree.
+  Under that order no two requests share more than the ~900-token instructions, which is below
+  OpenAI's 1,024-token caching floor, so the 3k–26k-token tree is paid for on every one of the ~38
+  requests about a screenshot. This track sends the tree first and the description last, and
+  changes no other character. The swap was checked before it became the only order: on a
+  200-element × 3-phrasing pilot the two layouts gave the same verdict on 97.5% of rows (58.0%
+  right / 10.8% wrong / 31.0% `NOT_FOUND` tree-first against 57.5 / 11.0 / 31.2 for the original),
+  with 70% of input cached against 0%. A flag for the original order existed for that pilot and
+  was removed once it had answered — a control, not a configuration, the same rule that retired
+  the `normalized-dims` prompt style. To reproduce it, swap the two trailing sections in
+  `build_xml_prompt` and send them as one user message.
+
+  Two more things were needed before OpenAI actually cached anything, both measured on a current
+  GPT model and both applied automatically: the shared half goes out as the **system message**
+  and the description as the user message, because the cache stops at a message boundary (as one
+  user message, sibling requests cached 0 of 1,927 tokens; split, they cached 1,917); and every
+  request carries `prompt_cache_key = screenshot_id`, because OpenAI routes by the first ~256
+  tokens and every request here opens with the same instructions, so without the key they all
+  queue on one route and overflow to cold machines. Through the real call path a screenshot's
+  second and third requests then cache 3,530 of 3,545 tokens.
+
+  On Anthropic the shared half is a content block carrying `cache_control` instead; nothing else
+  is needed. Verified on a 50-element pilot: all 150 requests either wrote the cache or read it
+  (first request about a screenshot writes, the rest read; two workers starting the same
+  screenshot together both write), none paid the plain rate. Cache writes are billed above the
+  plain rate, so each row also records `cache_creation_input_tokens` and the summary sums it as
+  `total_cache_creation_input_tokens` — read both before pricing an Anthropic run. The vision
+  track marks its image block the same way, so on Anthropic every request about a screenshot
+  after the first reads the system prompt and image from cache.
+
+Operational notes:
+
+- Output is `xml-<model>-…json`, never `vision-…`, so the two strategies cannot be confused in a listing. The checkpoint is `…-<model>-xml.partial.jsonl`, separate from any vision run.
+- `prompt_style` is recorded as `xpath`: the coordinate prompt never goes out on this track.
+- `--rescore <xml-result>` re-runs every XPath from `raw` against the dumps in `--xml-dir` and must reproduce the file exactly.
+  If the dumps are not where `--xml-dir` points, the boxes are kept and only re-graded, which is all `--rescore-gt` needs.
+- `--dry-run` reports whether every screenshot in the dataset has a dump before anything is spent.
+- Text requests on all three `--api-flavor`s; `--max-image-dim`, `--coord-grid`, `--coord-format` and `--prompt-style` are ignored on this track.
+
+---
+
+## `--only-from` — vision only where the tree gave nothing
+
+The cascade below needs a vision answer only for the rows XML did not answer. A model that already has a full vision run on the dataset needs nothing more.
+One that does not can buy just those rows:
+
+```bash
+ai-testing-benchmark run --model gpt-5.6-terra --api-flavor openai \
+    --base-url https://api.openai.com --api-key "$OPENAI_API_KEY" \
+    --dataset data/labels/ground-truth.jsonl --annotation-origin gpt-5.6 --description-index 0 1 2 \
+    --only-from benchmark-results/xml-gpt-5.6-terra-3phrasing-GT-ground-truth-gpt-5.6-….json
+```
+
+- The rows kept are the XML file's `NOT_FOUND`, invalid-XPath and no-match rows, by
+  (screenshot, element, phrasing). Rows that ended in a transport error on the XML side are
+  skipped and counted: they are not fall-through until the XML run retries them.
+- Everything else is an ordinary vision run — same prompt, same checkpoint as a full run of
+  that model, same scoring — so a full run later reuses every row this one paid for.
+- The result is **not** a vision benchmark of the model: its rows are the ones the tree
+  could not place, the hard third. The filename carries `-ONLY-FROM-xml`, and the JSON
+  records `only_from` (the source file) and `only_from_rows`. Feed it to `ai-testing-benchmark cascade`;
+  do not put its accuracy in a vision table.
+- Refused with `--input xml`: on that track "the rows XML did not answer" is the output.
+
+---
+
+## `cascade` — tree first, screenshot as the fallback
+
+A locator can try the tree first and show the model the screenshot only when the tree yields nothing. 
+Neither track measures that on its own, and no new request is needed to measure it: both halves have already been scored,
+so the cascade is a join of an `xml-…` file and a `vision-…` file on (screenshot, element, phrasing) and a re-count.
+
+```bash
+# From a cascade config: the two run configs it names, the newest complete result of each
+ai-testing-benchmark cascade --config config/cascade/gpt-5-6-terra.json --json benchmark-results/cascade-gpt-5.6-terra.json
+
+# Or two result files outright
+ai-testing-benchmark cascade \
+    benchmark-results/xml-gpt-5.6-terra-3phrasing-GT-ground-truth-gpt-5.6-….json \
+    benchmark-results/vision-gpt-5.6-terra-3phrasing-ONLY-FROM-xml-GT-ground-truth-gpt-5.6-….json \
+    --json benchmark-results/cascade-gpt-5.6-terra.json
+```
+
+Files come in pairs — XML result, then vision result — and several pairs can be given at once, one block of output per pair. 
+The block is a Markdown table with eight lines, overall and per phrasing:
+
+| # | Line                        | Rule                                                                                                     |
+|---|-----------------------------|----------------------------------------------------------------------------------------------------------|
+| 1 | XML answered correctly      | XPath resolved; centre of the first node's bounds inside the ground-truth box                            |
+| 2 | XML answered incorrectly    | XPath resolved to a node whose centre is outside                                                         |
+| 3 | XML not answered → vision   | `NOT_FOUND`, an XPath that does not compile, or one that matches no node. Sub-lines give the three apart |
+| 4 | Vision answered correctly   | rows from 3; the vision box's centre is inside                                                           |
+| 5 | Vision answered incorrectly | rows from 3; a box, centre outside                                                                       |
+| 6 | Vision not answered         | rows from 3; no box. Sub-lines: declined vs. parse failure or error                                      |
+| 7 | Correct overall             | 1 + 4                                                                                                    |
+| 8 | Incorrect overall           | 2 + 5 + 6                                                                                                |
+
+Both halves are judged by the **centroid** rule whatever `--metric` either run used, the same way `summary.xml_outcomes` already counts the XML side. 
+Note what the rule implies: a *wrong* XPath is final — the fallback fires on "not answered", never on "answered wrongly",
+so the cascade can score below the screenshot strategy alone, and on a pilot it did.
+
+What the population is, and is not:
+
+- **Every XML row, minus transport errors.** An error is what a resume retries, not an outcome; the count is printed.
+- **The vision file only has to cover the fall-through rows.** A row XML answered never
+  consults the vision side, so a vision run made only where XML gave nothing (`--only-from`)
+  and a full vision run score the cascade identically and print the same block. A
+  fall-through row with no vision partner cannot be placed in lines 4–6 and is excluded; that
+  count is printed too and should be 0 for either kind of file.
+- `--source gpt` keeps one labelling's element ids, the split `summary.by_source` makes.
+- `--with-vision-alone` adds one line under the table, the screenshot strategy on its own
+  over the same rows. Available only when the vision file is a full run; it is not one of
+  the eight lines, so it is off by default.
+
+Footnotes the block prints when they apply:
+
+- How many rows describe a key on the on-screen keyboard, and how many of those fell through.
+  The XML dumps here hold the application window only, so a keyboard key is never in the tree;
+  that part of line 3 is a limit of the data, not of the strategy. Word-pattern heuristic.
+- Whether the vision file's prompt lets the model decline. Under `--prompt-style pixels` it does not, so line 6 holds only parse failures and errors, never a "not found".
+- Whether the two halves come from different models.
+
+`--json` writes the same numbers, one object per pair, for tables and further analysis.
+
+---
+
+## Phrasings — asking the same element three ways
+
+The labelling pipeline writes **three** descriptions per element:
+
+| # | Style | Example |
+|---|---|---|
+| 0 | `name` | *the login button* |
+| 1 | `label` | *the button with the text login* |
+| 2 | `intent` | *the button that will allow the user to login to the system* |
+
+The benchmark used to ask only `descriptions[0]`, so two thirds of a dataset that had already been
+paid for went unused — and the third being measured is the easiest one. `name` is usually the
+element's **visible text**, so it flatters a model that grounds by reading text; `intent`
+deliberately carries no text handle.
+
+```bash
+# Score every element under all three, on a 1,500-element pilot = 4,500 requests
+ai-testing-benchmark run --model qwen2.5-vl --description-index 0 1 2 --limit 1500
+```
+
+Four things to know:
+
+- **`--limit` counts elements, not requests.** N phrasings means N times the calls.
+- **`total_elements` becomes rows** — elements × phrasings. `unique_elements` is the element count,
+  and every accuracy in `summary` is over the rows, so the headline *averages* the phrasings.
+  Per-phrasing figures are in `by_description`; that is where the finding is.
+- **`agreement` only counts elements scored under every phrasing.** A stopped run leaves elements
+  holding one or two of their three, and folding those in would score a 1-of-1 as unanimous. `any` is
+  the ceiling a better prompt could reach — the element was findable, some wording found it. `all` is
+  robustness. `mixed` is the population worth inspecting, because those elements say which wording the
+  model cannot use.
+- **An element labelled with fewer than three descriptions contributes fewer rows**, rather than a
+  clamped duplicate of `name` filed under `intent` — which would put identical predictions on both
+  sides of `agreement` and measure a gap in the dataset instead of the model. The run logs how many
+  pairs it skipped.
+
+A multi-phrasing run's filename carries `-3phrasing-`, because its headline sits below the same
+model's `name`-only result for a reason that has nothing to do with model quality.
+
+**Prompt caching is not comparable across the two.** The phrasings of one element run adjacently, so
+the image stays in the server's prompt cache and `cached_input_fraction` comes out higher than in a
+single-phrasing run. Compare models on total input tokens, never on that fraction.
+
+---
+
+## Image size and context limits
+
+**Screenshots are sent at their original resolution.** Downscaling to 1080 used to be the default;
+that was the wrong trade here, because the benchmark exists to measure how well a model can ground an
+element and shrinking the screenshot first only handicaps it. `--max-image-dim 1080` still answers the
+separate question of what a downscaling consumer would see.
+
+**Downscaling is not a benchmark setting.** A comparison across models is only meaningful when every
+model saw the screenshot the consumer will send it; a run at any non-zero value is answering a
+different question and cannot be put beside the others.
+
+Two consequences worth knowing.
+
+**Context.** A 1080×2400 screenshot becomes ~3,300 image tokens against ~900 at max-dim 1080 — enough
+on its own to overflow a small context and produce
+
+```
+the request exceeds the available context size (4096 tokens), try increasing it
+```
+
+That comes from the model server, not from this code. Raise the server's own context (`--ctx-size` on
+llama.cpp, `--max-model-len` on vLLM) or pass a smaller `--max-image-dim`.
+
+**Cost.** Native multiplies input tokens per element by roughly four, so results either side of this
+setting are not comparable on token counts. Measured on one run: a 1080×2400 screenshot cost 3,545
+input tokens per element, a 716×955 one 1,076, a 387×862 one 626. The image is essentially the whole
+input — the element description moves it by 0–2 tokens, correlating at r = −0.01. `max_image_dim` is
+recorded in every result file for exactly this reason.
+
+Neither changes what is measured: predictions and ground truth are both compared in normalised
+coordinates. But `_load_image_b64` must return the *resized* dimensions when it does resize, since
+pixel answers are normalised against them.
+
+---
+
+## Response parsing
+
+Models disagree wildly on output format, so `_parse_response()` in `scoring/parsing.py` handles
+11 shapes: clean
+`[x1,y1,x2,y2]`, nested arrays, JSON-encoded strings, markdown fences, `{x,y,width,height}` dicts,
+list-wrapped values, center-point-only `{x,y}`, GUI-Owl's native `{"x": [cx, cy]}`, multiple JSON
+objects, 5+ numbers (sliding window of 4), and preamble prose (regex fallback). Malformed JSON gets
+one repair attempt via `json-repair`.
+
+`_try_bbox_from_nums(nums, img_w, img_h)` uses a two-pass sliding window: pass 1 prefers a window
+where all four raw values are already ≤ 1.0, pass 2 accepts pixel-scale values and divides by the
+image dimensions.
+
+**If a new model returns something none of those cover, extend `_parse_response` in
+`scoring/parsing.py`.**
+
+### Temperature: greedy here, absent on a frontier model
+
+`temperature=0` is sent by default, and it is load-bearing rather than decorative. The main targets
+are self-hosted llama.cpp and vLLM endpoints, which honour it, and greedy decoding is what makes a
+coordinate reproducible across runs. **llama.cpp's own default is 0.8**, so simply not sending it
+would put sampling noise straight into digit tokens — where one flip turns `x=432` into `x=332`, a
+100px error rather than a rephrasing.
+
+Frontier models refuse it: GPT-5.x answers *"Unsupported value: 'temperature' does not support 0.0
+with this model"*, and recent Claude models return 400 for any non-default value. Two ways out, and
+the second needs no foresight:
+
+- `--temperature -1` sends none at all.
+- The script detects the refusal itself — a 400 or 422 whose body mentions `temperature` — drops the
+  parameter **for the rest of the run**, and retries that element inline. One wasted round-trip for
+  the whole run, not one per element. The match is on the body, so a 400 about a malformed image or a
+  context overflow is not mistaken for this.
+
+Either way `temperature` and `temperature_dropped` are recorded, because they decide whether two runs
+are strictly comparable: under greedy they reproduce, under the server's own default they need not.
+
+### Prose is a failure, not a bbox
+
+The last of those shapes — preamble prose followed by coordinates — used to be handled by scraping
+*every* number out of the text and sliding a window of four across them. A model that reasons in a
+numbered list and never commits to coordinates therefore handed over `1. … 2. … 3. … 4. …` and got a
+bounding box back **with no error**: 34 identical copies of one such box in a single run, 23% of its
+predictions carrying the fingerprint.
+
+Two rules now separate a real answer from a manufactured one:
+
+- **Numbers must arrive as a group.** `_numeric_runs` breaks a run wherever more than three letters
+  separate two numbers, so `[0.24, 0.81, 0.83, 0.90]` and `x1=24, y1=345, x2=233, y2=410` are single
+  groups while a sentence between two numbers is not. **Size cannot be the test:** the artefact box
+  was 0.00411 wide and the smallest real element in the dataset is 0.00370, so any floor rejecting
+  the fabrication also rejects genuine 4px icons.
+- **One scale decision per box, not per value.** `_normalize_val` divides by the image dimension only
+  when a value exceeds 1.0, so in `[1, 2, 3, 4]` the `1` was read as an already-normalised 1.0 — the
+  right-hand edge of the screen — while 2, 3 and 4 were read as pixels. `_normalize_window` decides
+  once from the largest value, which leaves a legitimate edge-hugging `[0, 812, 300, 906]` intact.
+
+An answer with no group of numbers now returns `no coordinates in response — the model answered in
+prose: …`.
+
+### Truncation is a failure too
+
+`max_tokens` used to be 512. A reasoning model spends its output budget *before* answering, so
+roughly half of all calls to one 12B thinking model hit `finish_reason="length"` and returned
+`content=""`. The caller then fell back to `reasoning_content` and handed raw reasoning prose to the
+parser, which scraped the `1.` and `2.` of a numbered list into a box **and reported no error**. One
+bogus box, repeated, is what a 100-element run recorded as 16% centroid accuracy — a number that
+measured the token cap, not the model.
+
+`max_tokens` is now 2048 and `finish_reason == "length"` returns an explicit truncation error before
+any fallback runs. **The general lesson: a component that silently manufactures a plausible answer
+instead of failing turns a config problem into corrupt data.**
+
+### Thinking models
+
+`--thinking-budget 0` is meant to disable chain-of-thought. The value is sent as `budget_tokens` only
+when `>= 0`; the default `-1` leaves the model's own default.
+
+**`budget_tokens` is a vLLM/Anthropic-shaped parameter and llama.cpp ignores it**, so against a
+llama.cpp endpoint the flag is a no-op — verified on one 12B thinking model, output tokens stayed at
+430–512 with `budget_tokens=0`. Worse, on that endpoint passing it took 24.4s instead of 19.4s, hit
+the token cap and returned empty content, which the benchmark reports as an error. **Use it only
+against vLLM.**
+
+Thinking models are also slow enough to change the plan: ~20s per element on a single-slot server
+against 2.9s for Qwen2.5-VL-7B, so a full 10,307-element run is roughly **56 hours** rather than under
+three. Either run it through vLLM where thinking can actually be capped, or use `--limit` and report
+the sample size.
+
+---
+
+## Output JSON format
+
+`config` is the run's configuration as it was resolved — the file (`config/…`, name and hash)
+when one was given, and every value after flag overrides and defaults, with the key's variable
+name in place of the key. It is the block to compare before comparing two files' numbers; the
+top-level fields that follow it (`prompt_style`, `coord_grid`, `workers`, …) are the same facts
+in the flat form earlier files carry.
+
+```json
+{
+  "model": "qwen2.5-vl",
+  "config": {"file": "config/vision/qwen2-5-vl-7b.json", "file_sha256": "…", "model": "qwen25-vl-7b", "input": "screenshot",
+             "endpoint": {"base_url": "http://localhost:8000", "api_flavor": "proxy", "api_key_env": "", "api_key_set": false},
+             "dataset": {"path": "data/labels/ground-truth.jsonl", "annotation_origin": ["gpt-5.6"], "images_dir": "data/images", "limit": 0},
+             "description_indices": [0, 1, 2], "prompt": {"style": "pixels"}, "coordinates": {"format": "corner", "grid": -1},
+             "inference": {"max_tokens": 2048, "temperature": 0, "thinking_budget": -1, "max_image_dim": 0, "timeout": 120, "workers": 5, "rpm": 0, "max_requests": 0},
+             "metric": "centroid", "output_dir": "benchmark-results"},
+  "date": "2026-08-01T22:10:03+00:00",
+  "dataset_path": "data/labels/ground-truth.jsonl",
+  "description_indices": [0, 1, 2],
+  "metric": "centroid",
+  "workers": 5,
+  "max_tokens": 2048,
+  "max_image_dim": 0,
+  "coord_grid": 0,
+  "prompt_style": "pixels",
+  "temperature": 0,
+  "temperature_dropped": false,
+  "thinking_budget": -1,
+  "served_model": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+  "stopped_early": false,
+  "summary": {
+    "total_elements": 30921,
+    "unique_elements": 10307,
+    "selected_elements": 30921, "completed_fraction": 1.0,
+    "metric": "centroid",
+    "primary_accuracy": 0.8519,
+    "by_description": {
+      "0": {"style": "name",   "total": 10307, "primary_accuracy": 0.8440,
+            "iou_accuracy": 0.4635, "mean_iou": 0.4621,
+            "avg_input_tokens": 3545.8, "avg_output_tokens": 19.7,
+            "avg_latency_ms": 1250.0, "error_count": 0},
+      "1": {"style": "label",  "primary_accuracy": 0.8811},
+      "2": {"style": "intent", "primary_accuracy": 0.8306}
+    },
+    "agreement": {
+      "phrasings": 3, "scored_elements": 10307,
+      "any_pass_count": "...", "any_accuracy": "...",
+      "all_pass_count": "...", "all_accuracy": "...",
+      "mixed_count": "..."
+    },
+    "iou_pass_count": 15211, "iou_accuracy": 0.4919,
+    "mean_iou": 0.4621, "median_iou": 0.4931, "iou_threshold": 0.5,
+    "centroid_pass_count": 26342, "centroid_accuracy": 0.8519,
+    "point_only_count": 0,
+    "bbox_count": 30921, "bbox_coverage": 1.0, "iou_accuracy_given_bbox": 0.4919,
+    "clamped_pred_count": 315,
+    "scale_check": {"predictions": 30921,
+                    "pred_median_cx": 0.499, "pred_median_cy": 0.547,
+                    "gt_median_cx": 0.500,  "gt_median_cy": 0.5575,
+                    "x_ratio": 0.998, "y_ratio": 0.9812,
+                    "axes_disagree": false, "suspect": false},
+    "offset_check": {"predictions": 30921,
+                     "median_dx": 0.0046, "median_dy": 0.0004,
+                     "median_abs_dx": 0.006, "median_abs_dy": 0.0033,
+                     "boxes": 30921,
+                     "median_width_ratio": 0.913, "median_height_ratio": 0.8182},
+    "total_input_tokens": 109799005, "total_output_tokens": 607624,
+    "avg_input_tokens": 3551.0, "avg_output_tokens": 19.7,
+    "total_cached_input_tokens": 16386, "cached_input_fraction": 0.2213,
+    "total_cache_creation_input_tokens": 0,
+    "p95_output_tokens": 23,
+    "elements_with_token_counts": 30921,
+    "error_count": 0, "timeout_count": 0,
+    "avg_latency_ms": 1250.0, "p50_latency_ms": 1100.0, "p95_latency_ms": 2800.0
+  },
+  "results": [
+    {
+      "screenshot_id": "sample-screen-1",
+      "element_id": "e3",
+      "description": "the login button",
+      "description_index": 0,
+      "description_style": "name",
+      "gt_bbox":   {"x": 0.12, "y": 0.45, "width": 0.20, "height": 0.06},
+      "pred_bbox": {"x": 0.11, "y": 0.44, "width": 0.21, "height": 0.07},
+      "pred_point": null,
+      "iou": 0.823,
+      "pass_iou": true,
+      "pass_centroid": true,
+      "error": "",
+      "latency_ms": 1140.0,
+      "input_tokens": 712,
+      "output_tokens": 19,
+      "cached_input_tokens": 172,
+      "img_w": 1080,
+      "img_h": 2400,
+      "raw": "[0.11, 0.44, 0.32, 0.51]"
+    }
+  ]
+}
+```
+
+`pass_centroid` is the centroid metric. `pred_point` is set instead of `pred_bbox` when the model
+returned a bare click point.
+
+**`click_inside` is gone**, at row level and in the summary. It was the original name for the
+centroid metric, kept as an alias after the rename; every reader now takes `pass_centroid` /
+`centroid_accuracy`, which files written under the old name also carry, so an older result still
+reads fine. `--rescore` strips it from every row it emits on every path, since carrying it forward
+would leave it holding the *previous* verdict — a stale field contradicting `pass_centroid` in the
+same row is worse than an absent one.
+
+Two per-row fields exist so a result can be re-scored later without the images and without guessing:
+
+- **`img_w` / `img_h`** — the dimensions this answer was normalised against, which are the *resized*
+  ones when `--max-image-dim` was in force, not the file's. `--rescore` reads them first; re-deriving
+  them from the image is silently wrong for a downscaled run.
+- **`raw`** — **not truncated** (`RAW_RESPONSE_CHARS = 0`). It is the only field that can tell a
+  model's mistake from the parser's, and every coordinate-convention bug here has been diagnosed by
+  reading it: GUI-Owl's 0–1000 grid was found by re-parsing `raw` out of a finished file rather than by
+  re-running 30,921 calls. The size is bounded by `--max-tokens`, ~8 KB per row at the 2048 default,
+  which in practice is 27 MB for a full run where Qwen writes ~25 characters per answer.
+
+### The six fields to read before believing an accuracy
+
+- **`bbox_coverage`** — the share of requests that returned a bounding box at all, and the first thing
+  to read when comparing models for a consumer that needs one. It is a **gate**: GUI-Owl at 15.1% and
+  Qwen2.5-VL at 100% are not answering the same question, so their centroids are not a ranking.
+- **`scale_check`** — whether predictions are distributed like the ground truth on each axis. The only
+  guard that works in aggregate, and therefore the only one that can see a coordinate-convention error
+  at all. `suspect: true` means the accuracy beside it is a property of the harness.
+- **`offset_check`** — which *direction* the model is wrong in. `median_dx`/`median_dy` are signed, in
+  screen fractions, with `median_abs_*` beside them and `median_width_ratio`/`median_height_ratio`
+  after. It separates three faults that all arrive as one low accuracy: **displacement** (signed
+  medians far from 0 — a fixed aim error), **scatter** (signed near 0 while absolute is large — the
+  model is not finding the element at all), and **mis-sizing** (position fine, ratio off — which is
+  what turns "centroid passes, IoU fails" into a cause).
+
+  **`scale_check` is structurally blind to the first of those**, because shifting a whole
+  distribution barely moves a ratio of medians. Measured: a frontier model on the float prompt sat
+  0.0988 of the screen too low on *every* prediction while `scale_check` reported `y_ratio` 0.857 —
+  inside its 0.8–1.25 band, `suspect: false`. This is the block that turns "that model scores 0%"
+  into a stateable model weakness.
+- **`clamped_pred_count`** — predictions pushed against the [0,1] edge. This catches *prose being
+  scraped into a box*, where the parser salvages numbers out of a sentence and lands on a full-frame
+  rectangle. A **high** value means the number below it measures the harness, not the model. A low
+  one means nothing on its own: a full-width list row genuinely has width 1.0.
+
+  It does **not** catch a wrong coordinate scale, and an earlier version of this file claimed it did.
+  That is false, and GUI-Owl disproved it: it answers on a 0–1000 grid, was read as 1080×2400 pixels,
+  and clamped 0.6% of 30,921 predictions — indistinguishable from a clean run. Dividing by a number
+  *larger* than the true divisor moves every value toward zero, not toward 1.0; `916 / 1080` is 0.85
+  and clamps nothing. Use `scale_check` for that, which is the field written after this one failed to
+  fire.
+- **`workers`** — every latency figure was measured at this concurrency, so two runs at different
+  values are not comparable on latency. On a single-slot server extra workers add queue wait to each
+  request rather than throughput.
+- **`elements_with_token_counts`** — kept separate from the token totals because a server that reports
+  no `usage` block leaves them at 0, which is not the same finding as a model that is genuinely cheap.
+
+**`cached_input_fraction` is recorded but should not be used to compare models.** Prompt caching is a
+property of the server's recent history, not of the model: it survives across runs, so the same
+benchmark twice reports different figures. It is there for diagnosing why input tokens or latency
+moved. `total_cache_creation_input_tokens` (and `cache_creation_input_tokens` per row) is Anthropic
+only — tokens written *into* the cache, billed above the plain input rate — and 0 everywhere else;
+price an Anthropic run from both figures, not from the cached reads alone.
+
+An `--input xml` file (named `xml-…`) adds, and a screenshot file lacks: top-level
+`"input": "xml"`, `"xml_prompt"` (the instructions file's name) and `"xml_prompt_sha256"` (a hash of its text); `summary.xml_outcomes` (`answered_correct`,
+`answered_incorrect`, `not_found`, `invalid_xpath`, `no_match`, `error`, `not_answered`, their
+`shares`, and the same per phrasing under `by_description`); and per row `"input": "xml"`,
+`"xpath"`, `"xml_outcome"` and `"xpath_matches"`. `raw` holds the model's reply — the XPath or
+`NOT_FOUND` — and `img_w`/`img_h` are the tree's `<hierarchy width height>`. A file without the
+`input` key predates the track and is a screenshot run. A vision file made with `--only-from`
+adds `only_from` (the XML result that chose its rows) and `only_from_rows`.
+
+---
+
+## Labelling your own screenshots
+
+The pipeline that produced the dataset is in the package. Four steps, one JSONL out:
+
+```bash
+pip install -e ".[pipeline]"
+cp .env.example .env          # set LLM_PROVIDER and the matching API key
+
+ai-testing-benchmark pipeline --input path/to/screenshots --output-name my-dataset
+```
+
+| Step                   | Calls             |                                             |
+|------------------------|-------------------|---------------------------------------------|
+| 1 · extract elements   | 1 per screenshot  | identify every interactive element          |
+| 2 · detect boxes       | **1 per element** | dominates the cost                          |
+| 3 · write descriptions | 1 per screenshot  | three phrasings each                        |
+| 4 · assemble           | 0                 | merge into one JSONL, write a stats sidecar |
+
+Everything it produces stays on your machine, under `data/`:
+
+```
+data/my-dataset.jsonl          the labels, in the same shape as the shipped ground truth (no annotation.origin)
+data/my-dataset-stats.json     counts, plus which provider and model did the labelling
+data/checkpoints/…             per-screenshot progress; deleted once the run completes cleanly
+```
+
+Those paths are anchored on the project root, not on the directory you run the command from, so a
+resume finds the earlier run's progress wherever you start it. Point the benchmark at the result
+with `"dataset": {"path": "data/my-dataset.jsonl", "images_dir": "path/to/screenshots"}` in a config
+(or `--dataset` / `--images-dir`). For the tree track you also need each screenshot's page source as
+`<screenshot_id>.xml` — a UiAutomator dump taken at the same moment — in the directory `xml_dir`
+names.
+
+Budget `N + (N × E) + N` calls for N screenshots averaging E elements. At the 12.3 elements per
+screenshot we measured that is ~14 calls each, so the 841-screenshot corpus cost ~12,000 calls.
+**Use `--limit` to pilot a prompt change over a couple of hundred calls first** — there is no flag
+that runs the pipeline without spending, and a small `--limit` is how you keep a trial cheap. Runs
+are checkpointed per screenshot and resume on re-run with the same `--output-name`.
+
+Two warnings the flags do not carry:
+
+- **Labelling is not reproducible.** No `temperature` is sent, because current frontier models
+  reject any non-default value, so each model manages its own sampling. Compare boxes within one
+  output file, never across two runs.
+- **Running this will not reproduce the shipped labellings box-for-box.** The step-2 prompt has
+  been revised since they were made — same box convention, slightly different boxes (median IoU
+  0.88 against the previous revision on a stratified sample). The ground truth is the artifact;
+  this pipeline is here to label a *new* corpus, not to regenerate that one.

@@ -1,0 +1,10 @@
+{
+  "model": "claude-opus-4-8",
+  "xml_config": "config/xml/claude-opus-4-8.json",
+  "vision_config": "config/vision/claude-opus-4-8.json",
+  "annotation_origin": [
+    "gpt-5.6"
+  ],
+  "with_vision_alone": true,
+  "results_dir": "benchmark-results"
+}
