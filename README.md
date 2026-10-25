@@ -57,6 +57,20 @@ Tree alone and the cascade are not the same measurement as the screenshot alone,
 a third of the elements have no node the tree can name (the keyboard, and interfaces drawn without a tree),
 and a wrong XPath is final, the fallback never fires on it.
 
+### Centroid Accuracy Explanation
+
+**A prediction passes the centroid check when the center of its bounding box falls inside the human-annotated target box.** When automation uses that center as its tap point, this checks whether the tap would land inside the intended control.
+
+![Examples of centroid correctness: predicted centers inside the target pass; centers outside the target fail.](https://github.com/user-attachments/assets/3224848f-cb3a-474b-82b0-d07187e1b099)
+
+In the visual, the **teal box** marks the human-annotated target, the **yellow box** shows the predicted bounds, and the **dot** marks the predicted center.
+
+On the left, the green dots fall inside the target, so both predictions pass. The boxes do not need to line up perfectly. On the right, the red dots fall outside the target, so both predictions fail—even when the boxes overlap.
+
+**Centroid accuracy is the percentage of evaluated requests that pass this check.** The same rule applies to screenshot predictions and the bounds of elements selected from the UI tree, giving the screenshot, tree, and cascade approaches a common scoring criterion.
+
+This metric checks where the proposed tap would land. A live test must still confirm that tapping the control produces the expected result.
+
 ### From the screenshot
 
 |                             | tap-point correct (centroid) | box correct (IoU ≥ 0.5) | median IoU | returned a box | asked for |
